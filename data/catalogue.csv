@@ -1,0 +1,24 @@
+sku_id,canonical_name,pack_size,category,shelf_life_days,unit_cost,mrp,case_qty,keywords
+PG5,Parle-G ₹5 pack,1 pc,biscuits,180,4.40,5,24,parle;parle-g;parleg;glucose
+GDC100,Good Day Cashew 100g,100 g,biscuits,180,26,30,12,good day;goodday;cashew
+BRB150,Bourbon cream biscuit 150g,150 g,biscuits,120,34,40,12,bourbon;cream biscuit
+MAG70,Maggi 2-Minute Noodles 70g,70 g,noodles,270,12.50,14,24,maggi;noodles
+MAG140,Maggi 2-Minute Noodles 140g,140 g,noodles,270,25,28,12,maggi;noodles
+YIP70,YiPPee! Noodles 70g,70 g,noodles,270,12,14,24,yippee;yipee
+TSALT1,Tata Salt 1 kg,1 kg,staples,720,25,28,10,tata salt;salt;uppu;namak
+ASH5,Aashirvaad Atta 5 kg,5 kg,staples,90,255,280,4,aashirvaad;atta;hittu
+FSO1,Fortune Sunflower Oil 1 L,1 L,staples,270,150,165,3,fortune;oil;enne;tel
+SUG1,Sugar 1 kg pouch,1 kg,staples,365,44,48,5,sugar;sakkare;chini;cheeni
+TUR1,Toor dal 1 kg,1 kg,staples,240,145,160,5,toor;tur;dal;bele
+RL250,Red Label Tea 250g,250 g,beverages,365,120,135,6,red label;tea;chai;chaha
+BRU50,Bru Instant Coffee 50g,50 g,beverages,540,105,120,6,bru;coffee
+RJ1L,Real Mixed Fruit Juice 1 L,1 L,beverages,180,100,115,6,real;juice
+HAL200,Haldiram's Aloo Bhujia 200g,200 g,namkeen,60,50,60,12,haldiram;bhujia;namkeen;mixture
+LAY52,Lay's Classic Salted 52g,52 g,snacks,120,17,20,24,lays;lay's;chips
+DM13,Cadbury Dairy Milk 13g,13 g,chocolates,270,8.50,10,36,dairy milk;cadbury;chocolate
+SURF1,Surf Excel Easy Wash 1 kg,1 kg,home care,720,120,135,3,surf;surf excel;washing powder
+VIM200,Vim Bar 200g,200 g,home care,720,18,20,24,vim;bar
+COL100,Colgate Strong Teeth 100g,100 g,personal care,730,50,58,12,colgate;paste;toothpaste
+LB125,Lifebuoy Soap 125g,125 g,personal care,1095,30,35,12,lifebuoy;soap;sabun
+HOR500,Horlicks 500g,500 g,health drinks,365,230,260,6,horlicks
+KJ200,Kissan Mixed Fruit Jam 200g,200 g,spreads,365,70,80,6,kissan;jam

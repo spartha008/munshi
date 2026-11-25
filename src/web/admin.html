@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Munshi console</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="console">
+  <header class="topbar">
+    <div class="brand"><span class="logo">M</span><div><h1>Munshi console</h1><p>Operator view · shop owners only ever see WhatsApp</p></div></div>
+    <div class="chips"><span id="chips" class="chips"></span>
+      <a class="chip" href="/admin/demand-report.csv" title="Next-week demand by area, only where 3+ shops contribute">Area demand report (CSV)</a></div>
+  </header>
+  <main class="console-grid">
+    <aside class="shops">
+      <div class="shops-head"><h2>Shops</h2><button class="ghost" id="reload" type="button">Refresh</button></div>
+      <ul id="shopList"></ul>
+    </aside>
+    <section class="detail">
+      <div class="detail-head" id="detailHead"><p class="empty">Pick a shop.</p></div>
+      <nav class="tabs" role="tablist">
+        <button role="tab" data-tab="chat" class="active">Conversation</button>
+        <button role="tab" data-tab="trace">Agent trace</button>
+        <button role="tab" data-tab="ledger">Ledger</button>
+        <button role="tab" data-tab="orders">Orders</button>
+        <button role="tab" data-tab="expiry">Expiry</button>
+        <button role="tab" data-tab="memory">Memory</button>
+      </nav>
+      <div class="pane active" id="pane-chat"></div>
+      <div class="pane" id="pane-trace"></div>
+      <div class="pane" id="pane-ledger"></div>
+      <div class="pane" id="pane-orders"></div>
+      <div class="pane" id="pane-expiry"></div>
+      <div class="pane" id="pane-memory"></div>
+    </section>
+  </main>
+  <script src="/static/admin.js"></script>
+</body>
+</html>

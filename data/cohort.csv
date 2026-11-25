@@ -1,0 +1,13 @@
+festival,category,uplift_pct,low_pct,high_pct,n_shops
+Christmas,biscuits,35,15,55,12
+Christmas,chocolates,60,30,90,12
+Christmas,beverages,20,5,35,12
+Christmas,snacks,25,10,40,12
+New Year,snacks,40,20,60,12
+New Year,beverages,30,10,50,12
+New Year,chocolates,30,10,50,12
+Sankranti,staples,30,15,45,12
+Sankranti,biscuits,15,0,30,12
+Deepavali,namkeen,80,40,120,12
+Deepavali,chocolates,70,40,100,12
+Deepavali,staples,25,10,40,12

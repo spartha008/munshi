@@ -1,0 +1,33 @@
+# Render Blueprint: New > Blueprint, pick this repo. Fill the secret values when prompted.
+services:
+  - type: web
+    name: munshi
+    runtime: docker
+    plan: 0.5c-512mb          # smallest paid instance; persistent disks need a paid plan
+    region: singapore         # closest Render region to India
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /healthz
+    autoDeployTrigger: commit
+    disk:
+      name: munshi-data
+      mountPath: /var/data    # SQLite ledger + bill photos live here
+      sizeGB: 1
+    envVars:
+      - key: MUNSHI_DB
+        value: /var/data/munshi.db
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: WHATSAPP_TOKEN
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: WHATSAPP_APP_SECRET
+        sync: false
+      - key: WHATSAPP_VERIFY_TOKEN
+        generateValue: true
+      - key: WHATSAPP_DISPLAY_NUMBER
+        sync: false
+      - key: SARVAM_API_KEY
+        sync: false
+      - key: ADMIN_PASSWORD
+        generateValue: true

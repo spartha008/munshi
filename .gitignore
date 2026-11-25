@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+munshi.db
+data/uploads/
+.env
+*.db-wal
+*.db-shm
+uploads/
+.env.*
+!.env.example
+local*.db*
