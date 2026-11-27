@@ -17,6 +17,10 @@ services:
         value: /var/data/munshi.db
       - key: ANTHROPIC_API_KEY
         sync: false
+      - key: MUNSHI_MODEL
+        value: claude-opus-5-5
+      - key: MUNSHI_MODEL_TEXT
+        value: claude-haiku-5-5
       - key: WHATSAPP_TOKEN
         sync: false
       - key: WHATSAPP_PHONE_NUMBER_ID

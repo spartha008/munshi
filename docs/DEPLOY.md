@@ -16,8 +16,10 @@ Plus `ADMIN_PASSWORD` for the operator console at `/admin` (user `admin`).
 
 ## 1. Get the API keys
 
-**Claude.** In the Anthropic Console, create an API key. Munshi uses `claude-opus-5-5` by default
-(override with `MUNSHI_MODEL`).
+**Claude.** In the Anthropic Console, create an API key and add prepaid credit. Munshi uses two models:
+`claude-opus-5-5` to read bill photos (`MUNSHI_MODEL`) and `claude-haiku-5-5` for name matching and
+Kannada/Hindi replies (`MUNSHI_MODEL_TEXT`). At the README's volumes that is roughly $2.50 per shop per
+month; $5 of credit covers a week of testing.
 
 **Sarvam.** In the Sarvam dashboard, create an API subscription key. Munshi calls `POST /speech-to-text`
 with model `saaras:v4` in `translit` mode, so transcripts come back in Latin script.

@@ -14,7 +14,10 @@ import anthropic
 
 from .db import ROOT
 
-MODEL = os.environ.get("MUNSHI_MODEL", "claude-opus-5-5")
+# Two models: the strongest reads bill photos (the hard, once-a-week job); a cheap one handles the
+# many small text calls (name matching, Kannada/Hindi replies), roughly 40x cheaper per token.
+MODEL_BILL = os.environ.get("MUNSHI_MODEL", "claude-opus-5-5")
+MODEL_TEXT = os.environ.get("MUNSHI_MODEL_TEXT", "claude-haiku-5-5")
 EFFORT_BILL = os.environ.get("MUNSHI_EFFORT_BILL", "medium")
 EFFORT_NAMES = os.environ.get("MUNSHI_EFFORT_NAMES", "low")
 PROMPTS = ROOT / "prompts"
@@ -43,7 +46,17 @@ def enabled() -> bool:
 
 
 def status() -> dict:
-    return {"enabled": enabled(), "model": MODEL if enabled() else None, "disabled_reason": _disabled_reason}
+    on = enabled()
+    return {"enabled": on, "model": MODEL_BILL if on else None, "text_model": MODEL_TEXT if on else None,
+            "disabled_reason": _disabled_reason}
+
+
+def _request_options(model: str) -> dict:
+    """A policy decline is retried server-side on a recommended model. Haiku has no fallback route,
+    so the parameter is left off there (sending a model list to it is rejected outright)."""
+    if "haiku" in model.lower():
+        return {}
+    return {"betas": ["server-side-fallback-2026-07-01"], "fallbacks": "default"}
 
 
 def _get_client() -> anthropic.Anthropic:
@@ -104,17 +117,16 @@ NAME_SCHEMA = {
 }
 
 
-def _call_json(content: list[dict], schema: dict, effort: str) -> dict:
+def _call_json(content: list[dict], schema: dict, effort: str, model: str) -> dict:
     """One Messages call that must return JSON matching `schema`."""
     global _disabled_reason
     try:
         resp = _get_client().beta.messages.create(
-            model=MODEL,
+            model=model,
             max_tokens=16000,
-            betas=["server-side-fallback-2026-07-01"],
-            fallbacks="default",   # a policy decline is retried server-side on a recommended model
             messages=[{"role": "user", "content": content}],
             output_config={"effort": effort, "format": {"type": "json_schema", "schema": schema}},
+            **_request_options(model),
         )
     except anthropic.AuthenticationError as e:
         _disabled_reason = "authentication failed: check ANTHROPIC_API_KEY"
@@ -151,7 +163,7 @@ def extract_bill(image: bytes, media_type: str, mismatch_note: str | None = None
                                      "data": base64.standard_b64encode(image).decode("ascii")}},
         {"type": "text", "text": prompt},
     ]
-    return _call_json(content, BILL_SCHEMA, EFFORT_BILL)
+    return _call_json(content, BILL_SCHEMA, EFFORT_BILL, MODEL_BILL)
 
 
 TRANSLATE_SCHEMA = {
@@ -175,7 +187,8 @@ def translate(texts: list[str], lang: str) -> list[str]:
         "Return the translations in the same order.\n\n"
         + "\n".join(f'<message index="{i}">\n{t}\n</message>' for i, t in enumerate(texts))
     )
-    out = _call_json([{"type": "text", "text": prompt}], TRANSLATE_SCHEMA, "low").get("translations") or []
+    out = (_call_json([{"type": "text", "text": prompt}], TRANSLATE_SCHEMA, "low", MODEL_TEXT)
+           .get("translations") or [])
     return out if len(out) == len(texts) else texts
 
 
@@ -185,4 +198,4 @@ def normalise(phrase: str, aliases: list[tuple[str, str]], catalogue: list[tuple
     cat_txt = "\n".join(f"{s}, {n}, {pk}" for s, n, pk in catalogue)
     prompt = (template.replace("{aliases}", alias_txt).replace("{catalogue}", cat_txt)
               .replace("{phrase}", phrase.replace('"', "'")))
-    return _call_json([{"type": "text", "text": prompt}], NAME_SCHEMA, EFFORT_NAMES)
+    return _call_json([{"type": "text", "text": prompt}], NAME_SCHEMA, EFFORT_NAMES, MODEL_TEXT)

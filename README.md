@@ -276,7 +276,7 @@ KPIs: rupees of expiring stock caught Â· stockouts avoided on the top-20 items Â
 
 ## Stack
 
-- Claude (`claude-opus-5-5`) with vision for `parse_bill`, text for `normalise_item` and Kannada/Hindi replies
+- Claude: Opus (`claude-opus-5-5`) reads bill photos for `parse_bill`; Haiku (`claude-haiku-5-5`) handles `normalise_item` and Kannada/Hindi replies, about 40x cheaper per token
 - SQLite on a persistent disk for the ledger (Postgres when it needs more than one server)
 - WhatsApp Cloud API (Meta), with signed webhooks and reply buttons
 - Sarvam AI speech-to-text (`saaras:v4`, romanized output) for Kannada and Hindi voice notes
