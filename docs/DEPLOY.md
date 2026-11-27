@@ -46,8 +46,9 @@ with model `saaras:v4` in `translit` mode, so transcripts come back in Latin scr
 1. Push this repository to GitHub.
 2. In Render: **New > Blueprint**, pick the repo. Render reads `render.yaml`: one Docker web service in
    Singapore with a 1 GB disk at `/var/data` (plan `0.5c-512mb`; persistent disks need a paid instance).
-3. Fill in the secrets it asks for. `WHATSAPP_VERIFY_TOKEN` and `ADMIN_PASSWORD` are generated for you;
-   copy both from the service's **Environment** tab afterwards.
+3. Fill in the values it asks for, copying each from your local `.env` (including
+   `WHATSAPP_VERIFY_TOKEN`, so the webhook keeps working). `ADMIN_PASSWORD` is generated for you; read
+   it from the service's **Environment** tab afterwards.
 4. Wait for the deploy, then open `https://<your-service>.onrender.com/healthz`. It should return
    `{"ok": true, "whatsapp": true, "claude": true, "voice": true}`.
 

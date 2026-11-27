@@ -28,16 +28,12 @@ services:
       - key: WHATSAPP_APP_SECRET
         sync: false
       - key: WHATSAPP_VERIFY_TOKEN
-        generateValue: true
+        sync: false             # paste the same value as in your .env, so the Meta webhook keeps working
       - key: WHATSAPP_DISPLAY_NUMBER
         sync: false
       - key: SARVAM_API_KEY
         sync: false
-      - key: TWILIO_ACCOUNT_SID
-        sync: false
-      - key: TWILIO_AUTH_TOKEN
-        sync: false
-      - key: TWILIO_WHATSAPP_FROM
-        sync: false
       - key: ADMIN_PASSWORD
-        generateValue: true
+        generateValue: true     # read it from the service's Environment tab; user name is "admin"
+      # Twilio (optional second channel): add TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and
+      # TWILIO_WHATSAPP_FROM in the dashboard if you ever get a Twilio WhatsApp sender.
