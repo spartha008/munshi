@@ -76,6 +76,7 @@ class WAMessage:
     mime_type: str | None = None
     profile_name: str | None = None
     timestamp: str | None = None
+    channel: str = "meta"           # meta (Cloud API) | twilio
 
 
 def parse_webhook(payload: dict) -> list[WAMessage]:
@@ -108,6 +109,19 @@ def parse_webhook(payload: dict) -> list[WAMessage]:
                     msg.type = "other"
                 if msg.wa_id and msg.message_id:
                     out.append(msg)
+    return out
+
+
+def parse_statuses(payload: dict) -> list[dict]:
+    """Delivery updates for messages we sent: sent / delivered / read / failed (with Meta's error)."""
+    out = []
+    for entry in payload.get("entry", []):
+        for change in entry.get("changes", []):
+            for s in (change.get("value") or {}).get("statuses", []):
+                out.append({"message_id": s.get("id"), "status": s.get("status"), "recipient": s.get("recipient_id"),
+                            "errors": [{"code": e.get("code"), "title": e.get("title"),
+                                        "detail": (e.get("error_data") or {}).get("details") or e.get("message")}
+                                       for e in s.get("errors", [])]})
     return out
 
 
@@ -198,7 +212,7 @@ def mark_read(message_id: str) -> None:
 class CloudTransport:
     """channels.Transport for messages Munshi starts (orders to distributors, notes to other shops)."""
 
-    def send_order_to_distributor(self, to: str, shop_name: str, text: str) -> str:
+    def send_order_to_distributor(self, to: str, shop_name: str, text: str, channel: str | None = None) -> str:
         try:
             return send_text(to, text)
         except DeliveryError as e:
@@ -207,5 +221,5 @@ class CloudTransport:
                 return send_template(to, tpl, [shop_name or "A Munshi shop", text])
             raise
 
-    def send_text(self, to: str, text: str) -> str:
+    def send_text(self, to: str, text: str, channel: str | None = None) -> str:
         return send_text(to, text)

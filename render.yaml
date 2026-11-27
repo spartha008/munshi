@@ -17,6 +17,10 @@ services:
         value: /var/data/munshi.db
       - key: ANTHROPIC_API_KEY
         sync: false
+      - key: MUNSHI_MODEL
+        value: claude-opus-5-5
+      - key: MUNSHI_MODEL_TEXT
+        value: claude-haiku-5-5
       - key: WHATSAPP_TOKEN
         sync: false
       - key: WHATSAPP_PHONE_NUMBER_ID
@@ -28,6 +32,12 @@ services:
       - key: WHATSAPP_DISPLAY_NUMBER
         sync: false
       - key: SARVAM_API_KEY
+        sync: false
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_WHATSAPP_FROM
         sync: false
       - key: ADMIN_PASSWORD
         generateValue: true

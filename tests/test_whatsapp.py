@@ -60,9 +60,11 @@ def client(monkeypatch, fake_llm):
     monkeypatch.setenv("ADMIN_PASSWORD", "pw")
     monkeypatch.setenv("WHATSAPP_DISPLAY_NUMBER", "+1 555 010 0200")
     from src import server
+    from src.worker import ChannelOps
     sent = []
-    monkeypatch.setattr(server.worker, "send", lambda to, r: sent.append((to, str(r), r.buttons)) or "wamid")
-    monkeypatch.setattr(server.worker, "mark_read", lambda mid: None)
+    monkeypatch.setitem(server.worker.ops, "meta", ChannelOps(
+        send=lambda to, r: sent.append((to, str(r), r.buttons)) or "wamid",
+        download=lambda mid: (b"", "image/jpeg"), mark_read=lambda mid: None))
     with TestClient(server.app) as c:
         c.sent = sent
         yield c
@@ -123,3 +125,12 @@ def test_public_pages_and_admin_auth(client):
     shops = client.get("/admin/api/shops", auth=("admin", "pw")).json()["shops"]
     assert isinstance(shops, list)
     assert client.get("/admin/media/uploads/..%2F..%2Fmunshi.db", auth=("admin", "pw")).status_code == 404
+
+
+def test_failed_delivery_status_is_recorded(client):
+    p = {"entry": [{"changes": [{"value": {"statuses": [{"id": "wamid.X", "status": "failed", "recipient_id": "919000000001",
+         "errors": [{"code": 131026, "title": "Message undeliverable", "error_data": {"details": "not on WhatsApp"}}]}]}}]}]}
+    assert post(client, p).status_code == 200
+    from src import server
+    row_ = server._conn.execute("SELECT shop_id, output FROM trace WHERE tool='whatsapp_delivery_failed'").fetchone()
+    assert row_[0] == "919000000001" and "131026" in row_[1]

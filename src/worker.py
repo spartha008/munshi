@@ -1,8 +1,9 @@
 """Processes inbound WhatsApp messages one at a time, off the webhook request.
 
-Meta expects a fast 200 and retries otherwise, so the webhook only verifies, de-duplicates
-and queues; this worker downloads media, transcribes voice, runs the agent, translates if the
-owner chose Kannada or Hindi, and sends the replies.
+Providers expect a fast 200 and retry otherwise, so the webhooks only verify, de-duplicate
+and queue; this worker downloads media, transcribes voice, runs the agent, translates if the
+owner chose Kannada or Hindi, and sends the replies back on the channel they came from
+(Meta's Cloud API or Twilio).
 """
 from __future__ import annotations
 
@@ -11,11 +12,12 @@ import os
 import queue
 import threading
 import uuid
+from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 from typing import Callable
 
-from . import agent, clock, llm, onboarding, stt, whatsapp
+from . import agent, clock, llm, onboarding, stt, twilio_wa, whatsapp
 from .agent import Reply
 from .db import DB_PATH, iso, parse_dt, row, rows
 
@@ -24,6 +26,19 @@ UPLOADS = Path(DB_PATH).parent / "uploads"
 
 UNSUPPORTED = ("I can read distributor bill photos, voice notes and text messages. "
                "Please send one of those.")
+
+
+@dataclass
+class ChannelOps:
+    send: Callable[[str, Reply], str]
+    download: Callable[[str], tuple[bytes, str]]
+    mark_read: Callable[[str], None]
+
+
+DEFAULT_OPS = {
+    "meta": ChannelOps(whatsapp.send_reply, whatsapp.download_media, whatsapp.mark_read),
+    "twilio": ChannelOps(twilio_wa.send_reply, twilio_wa.download_media, twilio_wa.mark_read),
+}
 
 
 def _keyterms(conn, shop_id: str) -> list[str]:
@@ -51,13 +66,21 @@ def localise(replies: list[Reply], lang: str | None) -> list[Reply]:
 
 
 class Worker:
-    def __init__(self, conn, lock: threading.Lock, send: Callable[[str, Reply], str] = whatsapp.send_reply,
-                 download: Callable[[str], tuple[bytes, str]] = whatsapp.download_media,
-                 transcribe: Callable[..., str] = stt.transcribe, mark_read: Callable[[str], None] = whatsapp.mark_read):
-        self.conn, self.lock = conn, lock
-        self.send, self.download, self.transcribe, self.mark_read = send, download, transcribe, mark_read
+    def __init__(self, conn, lock: threading.Lock, send: Callable[[str, Reply], str] | None = None,
+                 download: Callable[[str], tuple[bytes, str]] | None = None,
+                 transcribe: Callable[..., str] = stt.transcribe, mark_read: Callable[[str], None] | None = None,
+                 ops: dict[str, ChannelOps] | None = None):
+        """`send`/`download`/`mark_read` override every channel (tests); `ops` sets them per channel."""
+        self.conn, self.lock, self.transcribe = conn, lock, transcribe
+        self.ops = dict(ops or DEFAULT_OPS)
+        if send or download or mark_read:
+            for name, base in list(self.ops.items()):
+                self.ops[name] = ChannelOps(send or base.send, download or base.download, mark_read or base.mark_read)
         self.q: queue.Queue = queue.Queue()
         self._thread: threading.Thread | None = None
+
+    def _ops(self, channel: str | None) -> ChannelOps:
+        return self.ops.get(channel or "meta") or self.ops["meta"]
 
     # -- queueing ------------------------------------------------------------
     def start(self) -> None:
@@ -66,7 +89,7 @@ class Worker:
             self._thread.start()
 
     def submit(self, msg: whatsapp.WAMessage) -> bool:
-        """De-duplicate (Meta retries) and queue. Returns False for a repeat delivery."""
+        """De-duplicate (providers retry) and queue. Returns False for a repeat delivery."""
         with self.lock:
             cur = self.conn.execute("INSERT OR IGNORE INTO wa_inbound VALUES (?,?)", (msg.message_id, iso(clock.now())))
         if cur.rowcount == 0:
@@ -86,18 +109,21 @@ class Worker:
 
     # -- processing ------------------------------------------------------------
     def process(self, msg: whatsapp.WAMessage) -> list[Reply]:
-        self.mark_read(msg.message_id)
+        ops = self._ops(msg.channel)
+        ops.mark_read(msg.message_id)
         with self.lock:
             shop = row(self.conn, "SELECT * FROM shop WHERE shop_id=?", msg.wa_id)
             if shop:
-                self.conn.execute("UPDATE shop SET last_inbound_at=? WHERE shop_id=?", (iso(clock.now()), msg.wa_id))
+                # An owner who switches numbers/channels keeps their shop; replies follow the latest channel.
+                self.conn.execute("UPDATE shop SET last_inbound_at=?, channel=? WHERE shop_id=?",
+                                  (iso(clock.now()), msg.channel, msg.wa_id))
         if not shop:
             with self.lock:
-                replies = onboarding.start(self.conn, msg.wa_id, msg.profile_name)
+                replies = onboarding.start(self.conn, msg.wa_id, msg.profile_name, msg.channel)
                 agent.log_message(self.conn, msg.wa_id, "in", "text", msg.text or f"[{msg.type}]")
                 for r in replies:
                     agent.log_message(self.conn, msg.wa_id, "out", "text", str(r))
-            return self._deliver(msg.wa_id, replies, "en")
+            return self._deliver(msg.wa_id, replies, "en", msg.channel)
 
         if shop["onboarding_step"]:
             text = msg.text if msg.type in {"text", "interactive", "button"} else ""
@@ -105,21 +131,21 @@ class Worker:
                 replies = onboarding.handle(self.conn, shop, text) if text else [
                     Reply("Let's finish setting up first — then send me your bills.")]
                 lang = row(self.conn, "SELECT language FROM shop WHERE shop_id=?", msg.wa_id)["language"]
-            return self._deliver(msg.wa_id, replies, lang)
+            return self._deliver(msg.wa_id, replies, lang, msg.channel)
 
-        inbound = self._to_inbound(msg, shop)
+        inbound = self._to_inbound(msg, shop, ops)
         if isinstance(inbound, Reply):
-            return self._deliver(msg.wa_id, [inbound], shop["language"])
+            return self._deliver(msg.wa_id, [inbound], shop["language"], msg.channel)
         with self.lock:
             replies = agent.handle(self.conn, msg.wa_id, inbound)
-        return self._deliver(msg.wa_id, replies, shop["language"])
+        return self._deliver(msg.wa_id, replies, shop["language"], msg.channel)
 
-    def _to_inbound(self, msg: whatsapp.WAMessage, shop: dict) -> agent.Inbound | Reply:
+    def _to_inbound(self, msg: whatsapp.WAMessage, shop: dict, ops: ChannelOps) -> agent.Inbound | Reply:
         if msg.type in {"text", "interactive", "button"}:
             return agent.Inbound("text", text=msg.text, wa_message_id=msg.message_id)
         if msg.type == "image":
             try:
-                data, mime = self.download(msg.media_id)
+                data, mime = ops.download(msg.media_id)
             except Exception as e:  # noqa: BLE001
                 log.warning("media download failed: %s", e)
                 return Reply("I couldn't download that photo. Please send it again.")
@@ -133,7 +159,7 @@ class Worker:
             if not stt.configured():
                 return Reply("I can't listen to voice notes yet. Please type it, e.g. \"Maggi khatam, Parle-G do bache\".")
             try:
-                data, mime = self.download(msg.media_id)
+                data, mime = ops.download(msg.media_id)
                 with self.lock:
                     terms = _keyterms(self.conn, shop["shop_id"])
                 text = self.transcribe(data, mime, shop["language"], terms)
@@ -145,13 +171,14 @@ class Worker:
             return agent.Inbound("voice", text=text, wa_message_id=msg.message_id)
         return Reply(UNSUPPORTED)
 
-    def _deliver(self, to: str, replies: list[Reply], lang: str | None) -> list[Reply]:
+    def _deliver(self, to: str, replies: list[Reply], lang: str | None, channel: str | None = "meta") -> list[Reply]:
         out = localise(replies, lang)
+        send = self._ops(channel).send
         for r in out:
             try:
-                self.send(to, r)
+                send(to, r)
             except Exception as e:  # noqa: BLE001
-                log.error("send to %s failed: %s", to, e)
+                log.error("send to %s via %s failed: %s", to, channel, e)
         return out
 
     # -- proactive (scheduler) ---------------------------------------------------
@@ -163,11 +190,12 @@ class Worker:
     def proactive(self, shop: dict, replies: list[Reply]) -> bool:
         if not replies:
             return False
+        channel = shop.get("channel") or "meta"
         if self.can_message_freely(shop):
-            self._deliver(shop["shop_id"], replies, shop["language"])
+            self._deliver(shop["shop_id"], replies, shop["language"], channel)
             return True
         tpl = os.environ.get("WHATSAPP_NUDGE_TEMPLATE")
-        if tpl:
+        if tpl and channel == "meta":
             try:
                 whatsapp.send_template(shop["shop_id"], tpl, [shop["name"] or "your shop"])
                 return True

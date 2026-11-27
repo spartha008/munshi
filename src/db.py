@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS shop (
     target_cover_days REAL DEFAULT 7,
     distributor_id INTEGER,
     onboarding_step TEXT,                   -- NULL once onboarded
+    channel TEXT DEFAULT 'meta',            -- meta (Cloud API) | twilio: how this owner reaches Munshi
     created_at TEXT,
     last_inbound_at TEXT
 );
@@ -250,7 +251,8 @@ def load_catalogue_csv() -> list[dict]:
         return list(csv.DictReader(f))
 
 
-MIGRATIONS = [("reminder", "rupees", "REAL")]  # additive columns for databases created by older versions
+MIGRATIONS = [("reminder", "rupees", "REAL"),  # additive columns for databases created by older versions
+              ("shop", "channel", "TEXT DEFAULT 'meta'")]
 
 
 def init_db(conn: sqlite3.Connection) -> None:

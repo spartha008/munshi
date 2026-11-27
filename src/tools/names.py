@@ -33,7 +33,8 @@ FILLER = {"hai", "he", "hain", "ide", "ive", "bache", "bacha", "bachi", "bachey"
           "bas", "is", "are", "the", "of", "pieces", "pcs", "pc", "baaki", "ulidide", "ulide", "hogide",
           "ho", "gaya", "gayi", "gaye", "aagide", "stock"}
 SIZE_RE = re.compile(r"\d+(?:\.\d+)?(?:g|gm|gms|kg|ml|l|ltr|pc|pcs|rs)?")
-SPLIT_RE = re.compile(r"[,.;\n]+|\s+(?:aur|and|mattu|matthu|also|phir)\s+", re.I)
+# Split on punctuation and connectors, but never inside a number such as 2,205.00
+SPLIT_RE = re.compile(r"\n+|(?<!\d)[,.;|]+|[,.;|]+(?!\d)|\s+(?:aur|and|mattu|matthu|also|phir)\s+", re.I)
 
 
 def split_note(text: str) -> list[str]:
@@ -163,11 +164,19 @@ def normalise_item(conn, shop_id: str, phrase: str, item_only: bool = False) -> 
             conf = float(res.get("confidence") or 0)
             guess = by_sku.get(sku) if sku else None
             if conf < CONFIDENCE_OK:
-                q = res.get("question") or _question(item_phrase, guess and guess["canonical_name"],
-                                                     res.get("action", action), res.get("qty"))
-                return {"sku_id": None, "guess": sku, "sku_name": guess and guess["canonical_name"],
-                        "qty": res.get("qty", qty), "action": res.get("action", action), "confidence": conf,
-                        "question": q, "via": "claude", "phrase": item_phrase}
+                # Below the bar nothing is written; the owner gets one yes/no question about the likeliest
+                # SKU. The question is ours (English) so the worker can translate it like every reply.
+                cand = res.get("candidate_sku_id") or sku
+                guess = by_sku.get(cand) if cand in by_sku else fuzzy_match(item_phrase, cat)[0]
+                act = res.get("action") or action
+                if act == "unknown":
+                    act = action
+                q_qty = res.get("qty") if res.get("qty") is not None else qty
+                return {"sku_id": None, "guess": guess and guess["sku_id"],
+                        "sku_name": guess and guess["canonical_name"], "qty": q_qty, "action": act,
+                        "confidence": conf, "via": "claude", "phrase": item_phrase,
+                        "question": _question(phrase if item_only else item_phrase,
+                                              guess and guess["canonical_name"], act, q_qty)}
             return {"sku_id": sku, "sku_name": guess and guess["canonical_name"],
                     "qty": res.get("qty") if res.get("qty") is not None else qty,
                     "action": res.get("action") if res.get("action") != "unknown" else action,

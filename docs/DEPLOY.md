@@ -16,8 +16,10 @@ Plus `ADMIN_PASSWORD` for the operator console at `/admin` (user `admin`).
 
 ## 1. Get the API keys
 
-**Claude.** In the Anthropic Console, create an API key. Munshi uses `claude-opus-5-5` by default
-(override with `MUNSHI_MODEL`).
+**Claude.** In the Anthropic Console, create an API key and add prepaid credit. Munshi uses two models:
+`claude-opus-5-5` to read bill photos (`MUNSHI_MODEL`) and `claude-haiku-5-5` for name matching and
+Kannada/Hindi replies (`MUNSHI_MODEL_TEXT`). At the README's volumes that is roughly $2.50 per shop per
+month; $5 of credit covers a week of testing.
 
 **Sarvam.** In the Sarvam dashboard, create an API subscription key. Munshi calls `POST /speech-to-text`
 with model `saaras:v4` in `translit` mode, so transcripts come back in Latin script.
@@ -62,6 +64,25 @@ In the Meta app: **WhatsApp > Configuration > Webhook**
 
 Send "Hi" to the number from a phone. Munshi asks for a language and five short setup questions, then
 it's ready for bill photos.
+
+## 4b. Optional: Twilio as a second WhatsApp channel
+
+Meta sometimes locks a brand-new business account for review (delivery error 131031) for a day or
+two. Twilio's WhatsApp sandbox works within minutes and can run alongside Meta; Munshi replies to
+each owner on the channel they wrote in on.
+
+1. Create a free account at twilio.com. On the Console home, copy **Account SID** and **Auth Token**
+   into `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN`.
+2. **Messaging → Try it out → Send a WhatsApp message**: note the sandbox number (`+1 415 523 8886`)
+   and its join code ("join <word-word>"). Set `TWILIO_WHATSAPP_FROM=whatsapp:+14155238886` and
+   `TWILIO_SANDBOX_JOIN=<word-word>`.
+3. **Sandbox settings**: "When a message comes in" = `https://<your host>/twilio`, method POST. Save.
+4. Each tester sends `join <word-word>` to the sandbox number once; the landing page link pre-fills
+   it when `MUNSHI_PUBLIC_CHANNEL=twilio`.
+
+Sandbox limits: no reply buttons (Munshi writes "Reply OK or Edit" instead), only joined phones can be
+messaged (so distributor orders are handed to the owner to forward), and the join expires after 72 hours
+of silence. A Twilio-provisioned production sender removes all three.
 
 ## 5. Optional: message templates
 

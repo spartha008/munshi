@@ -261,7 +261,8 @@ def send_order(conn, order_id: int) -> dict:
     channel, status, error, error_code = "forward", "handed_to_owner", None, None
     if dist.get("phone"):
         try:
-            channels.get_transport().send_order_to_distributor(dist["phone"], shop["name"] or "", body)
+            channels.get_transport().send_order_to_distributor(dist["phone"], shop["name"] or "", body,
+                                                               channel=shop.get("channel"))
             channel, status = "whatsapp", "delivered"
         except channels.DeliveryError as e:
             error, error_code = str(e), e.code
