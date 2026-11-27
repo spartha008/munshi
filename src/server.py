@@ -44,7 +44,13 @@ WEB = Path(__file__).parent / "web"
 _lock = threading.Lock()
 _conn = db.connect()
 db.init_db(_conn)
-worker = Worker(_conn, _lock)
+# Request handlers use their own connection, so a health check, a webhook receipt or a console page
+# never waits for the message being processed (a bill read can take a minute). SQLite's WAL mode
+# allows that; an in-memory database (tests) can't be shared, so they fall back to the worker's.
+_SEPARATE = str(db.DB_PATH) != ":memory:"
+_web_conn = db.connect() if _SEPARATE else _conn
+_web_lock = threading.Lock() if _SEPARATE else _lock
+worker = Worker(_conn, _lock, inbox_conn=_web_conn if _SEPARATE else None)
 
 
 @asynccontextmanager
@@ -106,7 +112,9 @@ def landing():
         html = html.replace("{{WA_LINK}}", link).replace("{{WA_NUMBER}}", disp).replace("{{HAS_NUMBER}}", "")
     else:
         html = html.replace("{{HAS_NUMBER}}", "hidden").replace("{{WA_LINK}}", "#").replace("{{WA_NUMBER}}", "")
-    return html
+    # Meta's developer test numbers (+1 555-…) deliver only to registered phones; say so on the page.
+    is_test = bool(re.match(r"^\+?1\s*555", disp or ""))
+    return html.replace("{{IS_TEST_NUMBER}}", "" if is_test else "hidden")
 
 
 @app.get("/qr.svg")
@@ -122,8 +130,8 @@ def qr():
 
 @app.get("/healthz")
 def healthz():
-    with _lock:
-        _conn.execute("SELECT 1").fetchone()
+    with _web_lock:
+        _web_conn.execute("SELECT 1").fetchone()
     return {"ok": True, "whatsapp": whatsapp.configured(), "twilio": twilio_wa.configured(),
             "claude": llm.enabled(), "voice": stt.configured()}
 
@@ -156,13 +164,21 @@ async def webhook(request: Request):
         if st["status"] == "failed":
             # Meta accepted the send but could not deliver it: keep the reason where the console shows it.
             log.warning("WhatsApp could not deliver %s to %s: %s", st["message_id"], st["recipient"], st["errors"])
-            with _lock:
-                _conn.execute("INSERT INTO trace (shop_id, message_id, tool, input, output, created_at) "
-                              "VALUES (?,NULL,'whatsapp_delivery_failed',?,?,?)",
-                              (st["recipient"] or "", json.dumps({"wa_message_id": st["message_id"]}),
-                               json.dumps(st["errors"], ensure_ascii=False), db.iso(clock.now())))
+            err = json.dumps(st["errors"], ensure_ascii=False)
+            with _web_lock:
+                _web_conn.execute("INSERT INTO trace (shop_id, message_id, tool, input, output, created_at) "
+                                  "VALUES (?,NULL,'whatsapp_delivery_failed',?,?,?)",
+                                  (st["recipient"] or "", json.dumps({"wa_message_id": st["message_id"]}), err,
+                                   db.iso(clock.now())))
+                # A reply to an owner, or an order to a distributor: mark the record the console shows.
+                _web_conn.execute("UPDATE message SET delivery=? WHERE wa_message_id=?", ("failed: " + err[:160], st["message_id"]))
+                _web_conn.execute("UPDATE outbox SET status='failed', error=? WHERE provider_msg_id=?", (err[:200], st["message_id"]))
         else:
             log.info("WhatsApp status: %s %s", st["status"], st["message_id"])
+            if st["status"] == "delivered":
+                with _web_lock:
+                    _web_conn.execute("UPDATE outbox SET status='delivered' WHERE provider_msg_id=? AND status='accepted'",
+                                      (st["message_id"],))
     return {"ok": True}
 
 
@@ -211,10 +227,10 @@ def admin_page():
 
 @app.get("/admin/api/shops", dependencies=[Depends(admin)])
 def admin_shops():
-    with _lock:
+    with _web_lock:
         return {"now": clock.now().isoformat(), "status": {"whatsapp": whatsapp.configured(),
                 "claude": llm.status(), "voice": stt.configured()},
-                "shops": rows(_conn, """SELECT s.shop_id, s.name, s.locality, s.language, s.onboarding_step, s.channel,
+                "shops": rows(_web_conn, """SELECT s.shop_id, s.name, s.locality, s.language, s.onboarding_step, s.channel,
                     s.salesman_day, s.cash_budget, s.created_at, s.last_inbound_at,
                     (SELECT COUNT(*) FROM message m WHERE m.shop_id=s.shop_id) AS messages,
                     (SELECT COUNT(*) FROM bill b WHERE b.shop_id=s.shop_id) AS bills,
@@ -224,8 +240,8 @@ def admin_shops():
 
 @app.get("/admin/api/shops/{shop_id}", dependencies=[Depends(admin)])
 def admin_shop(shop_id: str):
-    with _lock:
-        c = _conn
+    with _web_lock:
+        c = _web_conn
         shop = row(c, "SELECT * FROM shop WHERE shop_id=?", shop_id)
         if not shop:
             raise HTTPException(404)
@@ -270,14 +286,14 @@ def admin_shop(shop_id: str):
 
 @app.get("/admin/api/demand-report", dependencies=[Depends(admin)])
 def admin_demand_report():
-    with _lock:
-        return {"min_shops": insights.K_MIN_SHOPS, "rows": insights.demand_report(_conn)}
+    with _web_lock:
+        return {"min_shops": insights.K_MIN_SHOPS, "rows": insights.demand_report(_web_conn)}
 
 
 @app.get("/admin/demand-report.csv", dependencies=[Depends(admin)])
 def admin_demand_csv():
-    with _lock:
-        data = insights.demand_report(_conn)
+    with _web_lock:
+        data = insights.demand_report(_web_conn)
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(["locality", "category", "sku_id", "item", "shops", "next_week_units", "low", "high"])

@@ -5,7 +5,7 @@ import re
 
 from . import clock, trace
 from .agent import DAYS, HELP, Reply, log_message
-from .db import iso, row
+from .db import iso, locality_key, row
 
 LANG_BUTTONS = [("lang_en", "English"), ("lang_kn", "ಕನ್ನಡ"), ("lang_hi", "हिंदी")]
 # Button ids, full names and 1/2/3 only. Bare codes are left out on purpose: "hi" is a greeting,
@@ -79,7 +79,7 @@ def _step(conn, sid: str, step: str, t: str) -> list[Reply]:
     if step == "locality":
         if len(t) < 2 or len(t) > 120:
             return [_ask("locality")]
-        conn.execute("UPDATE shop SET locality=? WHERE shop_id=?", (t, sid))
+        conn.execute("UPDATE shop SET locality=?, locality_key=? WHERE shop_id=?", (t, locality_key(t), sid))
         _next(conn, sid, "distributor")
         return [_ask("distributor")]
     if step == "distributor":

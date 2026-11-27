@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS shop (
     cash_on_hand REAL,
     commitments REAL NOT NULL DEFAULT 0,
     locality TEXT,
+    locality_key TEXT,                      -- normalised locality, used for every cross-shop match
     salesman_day TEXT DEFAULT 'Thursday',
     target_cover_days REAL DEFAULT 7,
     distributor_id INTEGER,
@@ -72,6 +73,7 @@ CREATE TABLE IF NOT EXISTS bill (
     reconciled INTEGER,
     extractor TEXT,
     image_path TEXT,
+    image_hash TEXT,                        -- the same photo sent twice is read once
     created_at TEXT
 );
 CREATE TABLE IF NOT EXISTS purchase (
@@ -194,6 +196,7 @@ CREATE TABLE IF NOT EXISTS message (
     body TEXT,
     media_path TEXT,
     wa_message_id TEXT,
+    delivery TEXT,                          -- NULL (sent) | failed: what the console shows per reply
     created_at TEXT
 );
 CREATE TABLE IF NOT EXISTS outbox (
@@ -203,8 +206,9 @@ CREATE TABLE IF NOT EXISTS outbox (
     to_phone TEXT,
     body TEXT,
     channel TEXT,                           -- whatsapp | forward
-    status TEXT,
+    status TEXT,                            -- accepted | delivered | failed | handed_to_owner
     error TEXT,
+    provider_msg_id TEXT,                   -- so a later delivery report can update the row
     created_at TEXT
 );
 CREATE TABLE IF NOT EXISTS trace (
@@ -218,7 +222,8 @@ CREATE TABLE IF NOT EXISTS trace (
 );
 CREATE TABLE IF NOT EXISTS wa_inbound (
     wa_message_id TEXT PRIMARY KEY,         -- Meta retries webhooks; process each message once
-    received_at TEXT
+    received_at TEXT,
+    processed_at TEXT                       -- NULL until the worker finished it; a retry of an unfinished one runs again
 );
 CREATE TABLE IF NOT EXISTS job_run (
     shop_id TEXT NOT NULL,
@@ -252,7 +257,22 @@ def load_catalogue_csv() -> list[dict]:
 
 
 MIGRATIONS = [("reminder", "rupees", "REAL"),  # additive columns for databases created by older versions
-              ("shop", "channel", "TEXT DEFAULT 'meta'")]
+              ("shop", "channel", "TEXT DEFAULT 'meta'"),
+              ("shop", "locality_key", "TEXT"),
+              ("bill", "image_hash", "TEXT"),
+              ("message", "delivery", "TEXT"),
+              ("outbox", "provider_msg_id", "TEXT"),
+              ("wa_inbound", "processed_at", "TEXT")]
+
+
+def locality_key(text: str | None) -> str | None:
+    """'Kuvempunagar, Mysuru' and 'kuvempunagar' are the same place for cross-shop matching."""
+    if not text:
+        return None
+    import re as _re
+    first = text.split(",")[0]
+    key = _re.sub(r"[^a-z0-9]", "", first.lower())
+    return key or None
 
 
 def init_db(conn: sqlite3.Connection) -> None:
@@ -261,6 +281,10 @@ def init_db(conn: sqlite3.Connection) -> None:
     for table, col, decl in MIGRATIONS:
         if col not in {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+    # Backfill: shops created before locality_key existed, and inbound rows already handled.
+    for r in conn.execute("SELECT shop_id, locality FROM shop WHERE locality_key IS NULL AND locality IS NOT NULL").fetchall():
+        conn.execute("UPDATE shop SET locality_key=? WHERE shop_id=?", (locality_key(r[1]), r[0]))
+    conn.execute("UPDATE wa_inbound SET processed_at=received_at WHERE processed_at IS NULL")
     for c in load_catalogue_csv():
         conn.execute("""INSERT OR IGNORE INTO item (sku_id, shop_id, canonical_name, pack_size, category,
                         shelf_life_days, unit_cost, mrp, case_qty, keywords) VALUES (?,NULL,?,?,?,?,?,?,?,?)""",

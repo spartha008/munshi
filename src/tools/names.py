@@ -37,9 +37,31 @@ SIZE_RE = re.compile(r"\d+(?:\.\d+)?(?:g|gm|gms|kg|ml|l|ltr|pc|pcs|rs)?")
 SPLIT_RE = re.compile(r"\n+|(?<!\d)[,.;|]+|[,.;|]+(?!\d)|\s+(?:aur|and|mattu|matthu|also|phir)\s+", re.I)
 
 
+END_WORDS = SOLD_OUT | RUNNING_LOW | {"bache", "bacha", "bachi", "bachey", "left", "ide", "ive", "hai", "hain",
+                                      "baaki", "ulide", "ulidide"}
+_END_RE = re.compile(r"\b(" + "|".join(sorted(END_WORDS, key=len, reverse=True)) + r")\b\s+(?=\S)", re.I)
+
+
 def split_note(text: str) -> list[str]:
-    """'Maggi khatam, Parle-G do bache' -> ['Maggi khatam', 'Parle-G do bache']"""
-    return [p.strip() for p in SPLIT_RE.split(text) if p and p.strip()]
+    """'Maggi khatam, Parle-G do bache' -> ['Maggi khatam', 'Parle-G do bache'].
+    A transcript without punctuation ('maggi khatam parle g do bache surf kam') is split after each
+    status word, since a status always ends one item's phrase."""
+    out = []
+    for part in SPLIT_RE.split(text):
+        if not part or not part.strip():
+            continue
+        pieces = _END_RE.split(part.strip())
+        # re.split with one group alternates [text, endword, text, endword, ...]; stitch them back.
+        cur = ""
+        for i, piece in enumerate(pieces):
+            if i % 2 == 0:
+                cur += piece
+            else:
+                out.append((cur + piece).strip())
+                cur = ""
+        if cur.strip():
+            out.append(cur.strip())
+    return out
 
 
 def parse_status(phrase: str) -> tuple[str, float | None, str]:

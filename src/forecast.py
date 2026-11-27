@@ -26,8 +26,14 @@ def next_festival(today: date | None = None) -> dict | None:
     return min(upcoming, key=lambda f: f["date"]) if upcoming else None
 
 
-def festival_forecast(conn, shop_id: str) -> dict | None:
-    fest = next_festival()
+def festival_forecast(conn, shop_id: str, name: str | None = None) -> dict | None:
+    """The next festival, or the next occurrence of a named one ("sankranti" in December is January's)."""
+    if name:
+        today = clock.today()
+        matches = [f for f in festivals() if f["festival"].lower() == name.lower() and f["date"] >= today]
+        fest = min(matches, key=lambda f: f["date"]) if matches else None
+    else:
+        fest = next_festival()
     if not fest:
         return None
     up = uplifts(fest["festival"])

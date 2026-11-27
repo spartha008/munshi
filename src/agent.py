@@ -5,6 +5,7 @@ built from the ledger and the rules; nothing is ordered unless the owner's own m
 """
 from __future__ import annotations
 
+import hashlib
 import math
 import re
 from dataclasses import dataclass
@@ -33,8 +34,11 @@ class Reply(str):
 YES_NO = [("yes", "Yes"), ("no", "No")]
 ORDER_BUTTONS = [("ok", "OK, send ✅"), ("edit", "Edit ✏️")]
 
-OK_WORDS = {"ok", "okay", "ok send", "send", "send it", "approve", "approved", "theek hai", "thik hai", "sari",
-            "done", "👍", "ok.", "ok!", "yes send", "haan bhejo", "bhejo", "kalisi"}
+# Words that approve an open order. Deliberately narrow: "done" or "sari" after a shelf walk must not
+# send last week's list, and a bare "yes" counts only right after the proposal (see _last_out_is_order).
+OK_WORDS = {"ok", "okay", "ok send", "send", "send it", "send order", "approve", "approved", "theek hai",
+            "thik hai", "👍", "ok.", "ok!", "yes send", "haan bhejo", "bhejo", "kalisi"}
+CANCEL_WORDS = {"cancel order", "cancel the order", "order cancel", "no order", "drop the order"}
 # A forwarded bank / UPI message: an amount plus payment vocabulary. Never a shelf check.
 AMOUNT_RE = re.compile(r"(?:rs\.?|inr|₹)\s*([\d,]+(?:\.\d{1,2})?)", re.I)
 PAYMENT_RE = re.compile(r"\b(upi|imps|neft|credited|debited|paid to|received from|transaction id|txn|"
@@ -72,8 +76,27 @@ def log_message(conn, shop_id, direction, kind, body, media_path=None, wa_messag
     return cur.lastrowid
 
 
+def _last_out_is_order(conn, shop_id: str) -> bool:
+    """True when Munshi's latest message to this owner was an order proposal or an edit of one."""
+    last = row(conn, "SELECT body FROM message WHERE shop_id=? AND direction='out' ORDER BY id DESC LIMIT 1", shop_id)
+    body = (last or {}).get("body") or ""
+    return "order ready" in body or body.startswith("Updated:")
+
+
+def _logged_body(msg: Inbound) -> str:
+    """What the message log keeps. A forwarded payment SMS is reduced to its amount: no payer names."""
+    if msg.kind == "image":
+        return msg.text or "[bill photo]"
+    text = msg.text or ""
+    if msg.kind == "upi" or (PAYMENT_RE.search(text) and AMOUNT_RE.search(text)):
+        m = AMOUNT_RE.search(text)
+        direction = "paid out" if (OUTGOING_RE.search(text) and not INCOMING_RE.search(text)) else "received"
+        return f"[payment SMS: ₹{m.group(1)} {direction}]" if m else "[payment SMS]"
+    return text
+
+
 def handle(conn, shop_id: str, msg: Inbound) -> list[Reply]:
-    body = msg.text if msg.kind != "image" else (msg.text or "[bill photo]")
+    body = _logged_body(msg)
     mid = log_message(conn, shop_id, "in", msg.kind, body, msg.media_path, msg.wa_message_id)
     token = trace.bind(conn, shop_id, mid)
     if msg.kind == "voice":
@@ -125,15 +148,19 @@ def _route(conn, shop_id: str, msg: Inbound) -> list:
     order = ordering.open_order(conn, shop_id)
     yn = yes_no(text)
 
+    if order and low in CANCEL_WORDS:
+        conn.execute("UPDATE orders SET status='cancelled', summary='cancelled by owner' WHERE order_id=?",
+                     (order["order_id"],))
+        return ["Cancelled. Nothing was sent. Say \"order\" whenever you want a fresh list."]
     if order and low in OK_WORDS:
         return on_approve(conn, shop_id, order, text)
     if q and yn:
         return on_answer(conn, shop_id, q, yn)
-    if order and yn == "yes":
+    if order and yn == "yes" and _last_out_is_order(conn, shop_id):
         return on_approve(conn, shop_id, order, text)
     if order and (yn == "no" or low == "edit"):
         return ["Okay, nothing is sent. Tell me the change, like \"maggi 36\", \"remove lays\" or "
-                "\"add surf 3\". Or say \"order\" for a fresh list."]
+                "\"add surf 3\". Say \"cancel order\" to drop it, or \"order\" for a fresh list."]
 
     m = re.match(r"^salesman\s+(?:day\s+)?(\w+)$", low)
     if m and m.group(1)[:3] in {d[:3] for d in DAYS}:
@@ -169,8 +196,11 @@ def _route(conn, shop_id: str, msg: Inbound) -> list:
         return on_expiry(conn, shop_id)
     if low in {"stock", "low stock", "what's low", "kam"}:
         return on_stock(conn, shop_id)
-    if low.split()[0] in {"festival", "christmas", "sankranti", "deepavali", "diwali", "ugadi"}:
-        return on_festival(conn, shop_id)
+    m = re.match(r"^(festival|christmas|new year|sankranti|ugadi|eid|varamahalakshmi|ganesha|dasara|deepavali|diwali)"
+                 r"\b", low)
+    if m:
+        name = {"diwali": "deepavali"}.get(m.group(1), m.group(1))
+        return on_festival(conn, shop_id, None if name == "festival" else name)
     if low == "pool":
         return on_pool(conn, shop_id)
     if low in {"help", "?", "hi", "hello", "namaskara", "namaste", "menu", "start"}:
@@ -219,6 +249,14 @@ def _question_reply(q: dict | None, prefix: str = "") -> list[Reply]:
 # Observe: bill photo
 # --------------------------------------------------------------------------- #
 def on_bill(conn, shop_id: str, msg: Inbound) -> list:
+    # The same photo sent twice (a retry, a nervous owner) must not double the stock.
+    digest = hashlib.sha256(msg.image or b"").hexdigest() if msg.image else None
+    if digest:
+        seen = row(conn, "SELECT bill_date, bill_total, created_at FROM bill WHERE shop_id=? AND image_hash=? "
+                         "ORDER BY bill_id DESC LIMIT 1", shop_id, digest)
+        if seen:
+            when = f" of {_d(seen['bill_date'])}" if seen["bill_date"] else ""
+            return [f"I've already read this bill{when} ({_r(seen['bill_total'] or 0)}), so I haven't added it again."]
     try:
         data = parse_bill(msg.image or b"", msg.media_type or "image/jpeg")
     except BillUnreadable as e:
@@ -235,10 +273,10 @@ def on_bill(conn, shop_id: str, msg: Inbound) -> list:
             pass
 
     cur = conn.execute("""INSERT INTO bill (shop_id, distributor, bill_date, bill_total, lines_total, reconciled,
-                          extractor, image_path, created_at) VALUES (?,?,?,?,?,?,?,?,?)""",
+                          extractor, image_path, image_hash, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)""",
                        (shop_id, data.get("distributor"), data.get("bill_date"), data.get("bill_total"),
                         data.get("lines_total"), int(bool(data.get("reconciled"))), data.get("extractor"),
-                        msg.media_path, iso(now)))
+                        msg.media_path, digest, iso(now)))
     bill_id = cur.lastrowid
 
     events, pending, new_items = [], [], []
@@ -284,6 +322,7 @@ def on_bill(conn, shop_id: str, msg: Inbound) -> list:
         lines = [f"• {_short(r['name'])}: {r['at_risk_units']:.0f} won't sell before {_d(r['expiry'])} "
                  f"({_r(r['rupees_at_risk'])}) → {r['text']}" for r in risks]
         replies.append(f"{_r(sum(r['rupees_at_risk'] for r in risks))} may expire on the shelf:\n" + "\n".join(lines))
+        _schedule_returns(conn, shop_id, risks, data.get("distributor") or "the distributor")
 
     asked = None
     if not data.get("reconciled") and data.get("bill_total"):
@@ -302,6 +341,19 @@ def on_bill(conn, shop_id: str, msg: Inbound) -> list:
         replies.append(f"({waiting} more question{'s' if waiting > 1 else ''} saved for later — "
                        "I ask at most three a day.)")
     return replies
+
+
+def _schedule_returns(conn, shop_id: str, risks: list[dict], distributor: str) -> list[str]:
+    """Return-window reminders for stock that will expire on the shelf. Set as soon as the risk is seen,
+    so a shop that never approves an order still gets them."""
+    out = []
+    for r in risks:
+        if r["action"] == "return" and r["return_by"]:
+            reason = f"return {r['at_risk_units']:.0f} {_short(r['name'])} to {distributor}"
+            schedule_reminder(conn, shop_id, r["sku_id"], r["return_by"], reason, r["rupees_at_risk"])
+            when = "today" if r["return_by"] == clock.today().isoformat() else f"before {_d(r['return_by'])}"
+            out.append(f"{reason} {when}, when the return window closes")
+    return out
 
 
 def _remember_distributor(conn, shop_id: str, name: str | None) -> None:
@@ -432,6 +484,15 @@ def on_answer(conn, shop_id: str, q: dict, yn: str) -> list:
                 trace.log("pool_notify.failed", {"to": "requesting shop"}, {"error": str(e)})
         else:
             replies.append("Okay, I'll let them know it's a no.")
+            if other and sc:
+                try:
+                    from . import channels
+                    channels.get_transport().send_text(
+                        other["owner_phone"],
+                        f"The nearby shop can't split {sc['name']} {sc['buy_n']}+{sc['free_m']} this time. "
+                        "Buy only what you'll sell, or skip the scheme.", channel=other.get("channel"))
+                except Exception as e:  # noqa: BLE001
+                    trace.log("pool_notify.failed", {"to": "requesting shop"}, {"error": str(e)})
     elif q["kind"] == "bill_total":
         if yn == "yes":
             conn.execute("UPDATE bill SET reconciled=1 WHERE bill_id=?", (p["bill_id"],))
@@ -481,7 +542,8 @@ def _format_order(conn, shop_id: str, d: dict) -> list:
         head += f" {len(slow)} slow mover{'s' if len(slow) > 1 else ''} skipped."
     if d["refused"]:
         r0 = d["refused"][0]
-        head += (f" {len(d['refused'])} scheme refused — {_short(r0['name'])} {r0['buy_n']}+{r0['free_m']} "
+        head += (f" {len(d['refused'])} scheme{'s' if len(d['refused']) > 1 else ''} refused — "
+                 f"{_short(r0['name'])} {r0['buy_n']}+{r0['free_m']} "
                  f"would lock {_r(r0['cash_locked'])} for {r0['cover_days']} days.")
     head += " Reply OK or edit."
 
@@ -742,10 +804,10 @@ def on_stock(conn, shop_id: str) -> list:
     return ["Lowest cover first:\n" + "\n".join(lines)]
 
 
-def on_festival(conn, shop_id: str) -> list:
-    f = forecast.festival_forecast(conn, shop_id)
+def on_festival(conn, shop_id: str, name: str | None = None) -> list:
+    f = forecast.festival_forecast(conn, shop_id, name)
     if not f:
-        return ["No festival in my calendar yet."]
+        return [f"I don't have {name.title()} in my calendar yet." if name else "No festival in my calendar yet."]
     if not f["lines"]:
         return [f"{f['festival']} is in {f['days_away']} days. Once I've seen a couple of weeks of your sales, "
                 "I'll tell you how much extra to stock."]
@@ -766,14 +828,25 @@ def on_pool(conn, shop_id: str) -> list:
         return ["There's no scheme to share right now."]
     p = pools[0]
     shop = row(conn, "SELECT * FROM shop WHERE shop_id=?", shop_id)
-    nb = row(conn, """SELECT s.shop_id FROM sales_estimate se JOIN shop s ON s.shop_id=se.shop_id
-                      WHERE se.sku_id=? AND s.shop_id!=? AND s.locality=? AND s.onboarding_step IS NULL
-                      ORDER BY se.velocity_per_day DESC LIMIT 1""", p["sku_id"], shop_id, shop["locality"])
+    nb = row(conn, """SELECT s.* FROM sales_estimate se JOIN shop s ON s.shop_id=se.shop_id
+                      WHERE se.sku_id=? AND s.shop_id!=? AND s.locality_key IS NOT NULL AND s.locality_key=?
+                      AND s.onboarding_step IS NULL ORDER BY se.velocity_per_day DESC LIMIT 1""",
+             p["sku_id"], shop_id, shop["locality_key"])
     if not nb:
         return ["No other Munshi shop near you stocks it yet, so there's no one to split with. Skip this scheme."]
-    q = ask_owner(conn, nb["shop_id"], f"A Munshi shop near you wants to split {p['name']} {p['buy_n']}+{p['free_m']} "
-                                       "from the distributor. Interested? (Your names are shared only if you both say yes.)",
-                  "pool_offer", {"from_shop": shop_id, "scheme_id": p["scheme_id"]})
-    trace.log("pool_request", {"sku_id": p["sku_id"]}, {"queued_for_neighbour": True, "asked_now": bool(q)})
+    text = (f"A Munshi shop near you wants to split {p['name']} {p['buy_n']}+{p['free_m']} from the distributor. "
+            "Interested? (Your names are shared only if you both say yes.)")
+    q = ask_owner(conn, nb["shop_id"], text, "pool_offer", {"from_shop": shop_id, "scheme_id": p["scheme_id"]})
+    delivered = False
+    if q:  # it is the neighbour's open question only if it actually reaches them
+        try:
+            from . import channels
+            channels.get_transport().send_text(nb["owner_phone"] or nb["shop_id"], text + " Reply yes or no.",
+                                               channel=nb.get("channel"))
+            delivered = True
+        except Exception as e:  # noqa: BLE001
+            trace.log("pool_notify.failed", {"to": "neighbour"}, {"error": str(e)})
+            conn.execute("UPDATE question SET status='queued', asked_on=NULL WHERE id=?", (q["id"],))
+    trace.log("pool_request", {"sku_id": p["sku_id"]}, {"neighbour_asked_now": delivered})
     return [f"Asked a nearby Munshi shop about splitting {p['name']} {p['buy_n']}+{p['free_m']}. "
             "I'll tell you when they reply; your shop's name is shared only if they agree."]

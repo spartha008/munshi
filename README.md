@@ -272,6 +272,7 @@ KPIs: rupees of expiring stock caught · stockouts avoided on the top-20 items �
 | `cash 3800` · `budget 5000` · `dues 400` | Cash in the galla · order cap · bills to pay this week |
 | `salesman friday` · `distributor Sharma 9876543210` · `language kannada` · `settings` | Change setup |
 | `christmas` (or another festival) | Expected extra demand, with ranges |
+| `cancel order` | Drop the open proposal (a proposal nobody answers expires after 48 hours) |
 | `pool` | Ask a nearby Munshi shop to split a scheme lot |
 | `GD CSHW 100G is Good Day 100g` | Teach a bill name Munshi asked about |
 
@@ -281,7 +282,7 @@ KPIs: rupees of expiring stock caught · stockouts avoided on the top-20 items �
 
 - Claude: Opus (`claude-opus-5-5`) reads bill photos for `parse_bill`; Haiku (`claude-haiku-5-5`) handles `normalise_item` and Kannada/Hindi replies, about 40x cheaper per token
 - SQLite on a persistent disk for the ledger (Postgres when it needs more than one server)
-- WhatsApp Cloud API (Meta), with signed webhooks and reply buttons
+- WhatsApp Cloud API (Meta), with signed webhooks, reply buttons and delivery reports; a Twilio WhatsApp sender can run as a second channel
 - Sarvam AI speech-to-text (`saaras:v4`, romanized output) for Kannada and Hindi voice notes
 - FastAPI service in Docker, hosted on Render
 - Plain Python for every decision rule — no model in the arithmetic
@@ -307,7 +308,8 @@ munshi/
 │   ├── ledger.py          # bills + shelf counts -> per-item velocity, on hand, batches
 │   ├── agent.py           # the observe → learn loop with the approval gate
 │   ├── onboarding.py      # first conversation with a new shop
-│   ├── whatsapp.py        # Cloud API webhook, signature check, media, sending
+│   ├── whatsapp.py        # Cloud API webhook, signature check, media, sending, delivery reports
+│   ├── twilio_wa.py       # optional second channel: a Twilio WhatsApp sender
 │   ├── worker.py          # processes each inbound message once, off the webhook
 │   ├── scheduler.py       # salesman-morning orders, reminders, queued questions
 │   ├── stt.py             # Sarvam speech-to-text

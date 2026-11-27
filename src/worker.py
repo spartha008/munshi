@@ -69,9 +69,13 @@ class Worker:
     def __init__(self, conn, lock: threading.Lock, send: Callable[[str, Reply], str] | None = None,
                  download: Callable[[str], tuple[bytes, str]] | None = None,
                  transcribe: Callable[..., str] = stt.transcribe, mark_read: Callable[[str], None] | None = None,
-                 ops: dict[str, ChannelOps] | None = None):
-        """`send`/`download`/`mark_read` override every channel (tests); `ops` sets them per channel."""
+                 ops: dict[str, ChannelOps] | None = None, inbox_conn=None):
+        """`send`/`download`/`mark_read` override every channel (tests); `ops` sets them per channel.
+        `inbox_conn` is a second connection for the webhook's de-duplication insert, so receiving a
+        message never waits for the one being processed (a bill read can take a minute)."""
         self.conn, self.lock, self.transcribe = conn, lock, transcribe
+        self.inbox_conn = inbox_conn if inbox_conn is not None else conn
+        self.inbox_lock = threading.Lock() if inbox_conn is not None else lock
         self.ops = dict(ops or DEFAULT_OPS)
         if send or download or mark_read:
             for name, base in list(self.ops.items()):
@@ -89,13 +93,23 @@ class Worker:
             self._thread.start()
 
     def submit(self, msg: whatsapp.WAMessage) -> bool:
-        """De-duplicate (providers retry) and queue. Returns False for a repeat delivery."""
-        with self.lock:
-            cur = self.conn.execute("INSERT OR IGNORE INTO wa_inbound VALUES (?,?)", (msg.message_id, iso(clock.now())))
-        if cur.rowcount == 0:
-            return False
+        """De-duplicate (providers retry) and queue. Returns False for a repeat of a finished message;
+        a retry of one that never finished (crash or restart mid-way) is queued again."""
+        with self.inbox_lock:
+            cur = self.inbox_conn.execute("INSERT OR IGNORE INTO wa_inbound (wa_message_id, received_at) VALUES (?,?)",
+                                          (msg.message_id, iso(clock.now())))
+            if cur.rowcount == 0:
+                done = self.inbox_conn.execute("SELECT processed_at FROM wa_inbound WHERE wa_message_id=?",
+                                               (msg.message_id,)).fetchone()
+                if done and done[0]:
+                    return False
         self.q.put(msg)
         return True
+
+    def _finished(self, msg: whatsapp.WAMessage) -> None:
+        with self.inbox_lock:
+            self.inbox_conn.execute("UPDATE wa_inbound SET processed_at=? WHERE wa_message_id=?",
+                                    (iso(clock.now()), msg.message_id))
 
     def _loop(self) -> None:
         while True:
@@ -109,6 +123,12 @@ class Worker:
 
     # -- processing ------------------------------------------------------------
     def process(self, msg: whatsapp.WAMessage) -> list[Reply]:
+        try:
+            return self._process(msg)
+        finally:
+            self._finished(msg)
+
+    def _process(self, msg: whatsapp.WAMessage) -> list[Reply]:
         ops = self._ops(msg.channel)
         ops.mark_read(msg.message_id)
         with self.lock:
@@ -174,12 +194,20 @@ class Worker:
     def _deliver(self, to: str, replies: list[Reply], lang: str | None, channel: str | None = "meta") -> list[Reply]:
         out = localise(replies, lang)
         send = self._ops(channel).send
-        for r in out:
+        for original, r in zip(replies, out):
             try:
                 send(to, r)
             except Exception as e:  # noqa: BLE001
                 log.error("send to %s via %s failed: %s", to, channel, e)
+                self._mark_undelivered(to, str(original), str(e))
         return out
+
+    def _mark_undelivered(self, shop_id: str, body: str, error: str) -> None:
+        """The console must not show a reply the owner never got."""
+        with self.lock:
+            self.conn.execute("""UPDATE message SET delivery=? WHERE id = (
+                                   SELECT id FROM message WHERE shop_id=? AND direction='out' AND body=?
+                                   ORDER BY id DESC LIMIT 1)""", (f"failed: {error[:160]}", shop_id, body))
 
     # -- proactive (scheduler) ---------------------------------------------------
     def can_message_freely(self, shop: dict) -> bool:

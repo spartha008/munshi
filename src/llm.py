@@ -8,6 +8,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import time
 from pathlib import Path
 
 import anthropic
@@ -24,6 +25,8 @@ PROMPTS = ROOT / "prompts"
 
 _client: anthropic.Anthropic | None = None
 _disabled_reason: str | None = None
+_disabled_until: float = 0.0
+DISABLE_SECONDS = 300   # after an auth failure, stop calling for five minutes, then try again
 
 
 class LLMUnavailable(Exception):
@@ -35,7 +38,10 @@ class LLMRefused(Exception):
 
 
 def enabled() -> bool:
+    global _disabled_reason
     mode = os.environ.get("MUNSHI_LLM", "auto").lower()
+    if _disabled_reason and time.time() > _disabled_until:
+        _disabled_reason = None
     if mode == "off" or _disabled_reason:
         return False
     if mode == "on":
@@ -122,7 +128,7 @@ NAME_SCHEMA = {
 
 def _call_json(content: list[dict], schema: dict, effort: str, model: str) -> dict:
     """One Messages call that must return JSON matching `schema`."""
-    global _disabled_reason
+    global _disabled_reason, _disabled_until
     try:
         resp = _get_client().beta.messages.create(
             model=model,
@@ -133,6 +139,7 @@ def _call_json(content: list[dict], schema: dict, effort: str, model: str) -> di
         )
     except anthropic.AuthenticationError as e:
         _disabled_reason = "authentication failed: check ANTHROPIC_API_KEY"
+        _disabled_until = time.time() + DISABLE_SECONDS
         raise LLMUnavailable(_disabled_reason) from e
     except anthropic.PermissionDeniedError as e:
         raise LLMUnavailable("API key lacks permission for this model") from e

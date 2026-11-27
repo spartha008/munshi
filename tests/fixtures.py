@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from src.db import init_db, iso, load_catalogue_csv
+from src.db import init_db, iso, load_catalogue_csv, locality_key
 
 SHOP = "919000000001"
 NEIGHBOURS = {"919000000002": {"SURF1": 0.40, "HAL200": 0.15, "PG5": 7.0},
@@ -65,14 +65,16 @@ def build_shop(conn, now: datetime, onboarded_neighbours: bool = True) -> None:
     init_db(conn)
     x = conn.execute
     cur = x("INSERT INTO distributor (shop_id, name, phone) VALUES (?,?,?)", (SHOP, "Sharma Distributors", DIST_PHONE))
+    key = locality_key("Kuvempunagar, Mysuru")
     x("""INSERT INTO shop (shop_id, name, owner_name, owner_phone, language, cash_budget, cash_on_hand, commitments,
-         locality, salesman_day, distributor_id, created_at, last_inbound_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-      (SHOP, "Sri Lakshmi Stores", "Ravi", SHOP, "en", 5000, 4500, 400, "Kuvempunagar, Mysuru", "Thursday",
+         locality, locality_key, salesman_day, distributor_id, created_at, last_inbound_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+      (SHOP, "Sri Lakshmi Stores", "Ravi", SHOP, "en", 5000, 4500, 400, "Kuvempunagar, Mysuru", key, "Thursday",
        cur.lastrowid, iso(now - timedelta(days=30)), iso(now - timedelta(hours=1))))
     for sid, vels in NEIGHBOURS.items():
-        x("INSERT INTO shop (shop_id, name, owner_phone, locality, onboarding_step, last_inbound_at) VALUES (?,?,?,?,?,?)",
-          (sid, f"Shop {sid[-1]}", sid, "Kuvempunagar, Mysuru", None if onboarded_neighbours else "name",
-           iso(now - timedelta(hours=2))))
+        x("INSERT INTO shop (shop_id, name, owner_phone, locality, locality_key, onboarding_step, last_inbound_at) "
+          "VALUES (?,?,?,?,?,?,?)", (sid, f"Shop {sid[-1]}", sid, "Kuvempunagar", key,
+                                    None if onboarded_neighbours else "name", iso(now - timedelta(hours=2))))
         for sku, v in vels.items():
             x("INSERT INTO sales_estimate VALUES (?,?,?,?,?,'high',NULL,NULL,0,?)", (sid, sku, v, v * .85, v * 1.15,
                                                                                        iso(now)))

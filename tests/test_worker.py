@@ -55,9 +55,11 @@ def test_replies_are_translated_for_kannada_owners(conn):
 
 def test_submit_deduplicates_meta_retries(conn):
     w, _, _ = make(conn)
-    m = WAMessage(SHOP, "dup1", "text", text="hi")
+    m = WAMessage(SHOP, "dup1", "text", text="settings")
     assert w.submit(m) is True
-    assert w.submit(m) is False
+    assert w.submit(m) is True      # a retry of a message not yet finished runs again (crash safety)
+    w.process(w.q.get_nowait()); w.q.get_nowait()
+    assert w.submit(m) is False     # once finished, Meta's retries are ignored
 
 
 def test_greeting_hi_does_not_pick_hindi_during_onboarding(conn):

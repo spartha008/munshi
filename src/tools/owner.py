@@ -69,10 +69,12 @@ def close_question(conn, qid: int, answer: str) -> None:
 @traced("schedule_reminder")
 def schedule_reminder(conn, shop_id: str, sku_id: str | None, due_on: str, reason: str,
                       rupees: float | None = None) -> dict:
-    existing = row(conn, "SELECT * FROM reminder WHERE shop_id=? AND sku_id IS ? AND due_on=? AND reason=?",
-                   shop_id, sku_id, due_on, reason)
+    # One reminder per item and date: a re-estimate of the same batch updates it rather than adding another.
+    existing = row(conn, "SELECT * FROM reminder WHERE shop_id=? AND sku_id IS ? AND due_on=? AND status='scheduled'",
+                   shop_id, sku_id, due_on)
     if existing:
-        return existing
+        conn.execute("UPDATE reminder SET reason=?, rupees=? WHERE id=?", (reason, rupees, existing["id"]))
+        return {**existing, "reason": reason, "rupees": rupees}
     cur = conn.execute("INSERT INTO reminder (shop_id, sku_id, due_on, reason, rupees) VALUES (?,?,?,?,?)",
                        (shop_id, sku_id, due_on, reason, rupees))
     return {"id": cur.lastrowid, "due_on": due_on, "reason": reason}

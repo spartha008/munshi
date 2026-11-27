@@ -26,20 +26,35 @@ with model `saaras:v4` in `translit` mode, so transcripts come back in Latin scr
 
 ## 2. Set up the WhatsApp number (Meta)
 
-1. On developers.facebook.com, create an app and add the **WhatsApp** product. Meta gives you a test
-   business number.
-2. **WhatsApp > API Setup**: copy the **Phone number ID** (`WHATSAPP_PHONE_NUMBER_ID`).
-3. **Test number limits:** Meta's test number only delivers to recipient numbers you add on the API Setup
-   page (a handful). Add your team's and the judges' phones there. For a number anyone can message, add your
-   own business phone number on the same page and complete the display-name review.
-4. **Permanent token:** in Meta Business settings, create a **System user**, give it the app and the
-   WhatsApp account, and generate a token with `whatsapp_business_messaging` and
-   `whatsapp_business_management`. That's `WHATSAPP_TOKEN`. (The 24-hour token on the API Setup page works
-   for a quick test but expires.)
+Use a Facebook account with some history. A brand-new business portfolio can be restricted on creation
+("Account restricted — verify your business"; every send then fails with error 131031), and the only way
+out of that is Meta Business Verification with company documents. An established account usually gets a
+working test number straight away.
+
+1. On developers.facebook.com → **My Apps → Create app**, pick the WhatsApp use case (or Other →
+   Business), and let it create a **new** business portfolio. In business.facebook.com → Settings →
+   **Business info**, fill Legal name, Country and Website right away; Meta's checks don't run on an
+   incomplete profile.
+2. In the app, **Step 1. Try it out** shows the test number, its **Phone number ID**
+   (`WHATSAPP_PHONE_NUMBER_ID`) and the **WhatsApp Business Account ID**. The test number is
+   `WHATSAPP_DISPLAY_NUMBER` until you register a real one.
+3. **Recipients:** the test number only delivers to phones added under **To → Manage phone number list**
+   (OTP each; up to 5). Add the team's and the judges' phones, and the distributor's if orders should reach
+   them directly. For a number anyone can message, add your own business number under Step 2 and
+   complete the display-name review.
+4. **Token:** the token on the Step 1 page lasts 24 hours and dies when that browser session logs out. For
+   anything beyond a quick test, create a **System user** (Business settings → Users → System users), give
+   it the app and the WhatsApp account, and generate a token with `whatsapp_business_messaging`,
+   `whatsapp_business_management` and `business_management`, expiry Never. That's `WHATSAPP_TOKEN`.
 5. **App settings > Basic**: copy the **App secret** (`WHATSAPP_APP_SECRET`). Munshi rejects any webhook
    call that isn't signed with it.
-6. `WHATSAPP_DISPLAY_NUMBER` is the number as you want it shown on the landing page and QR code,
-   e.g. `+91 98xxx xxxxx`.
+6. **Subscribe the app to the account.** The new developer flow does not always do this, and without it
+   Meta never forwards messages even though the webhook verifies. Check with
+   `GET /{WABA_ID}/subscribed_apps`; if the app isn't listed, run
+   `POST https://graph.facebook.com/v25.0/{WABA_ID}/subscribed_apps` with the token as a Bearer header.
+7. Pay-as-you-go: Meta's health check (`GET /{WABA_ID}?fields=health_status`) flags a missing payment
+   method; replies to owners who message first are free, but adding a small prepaid amount under
+   Billing & payments clears the flag.
 
 ## 3. Deploy on Render
 
@@ -50,40 +65,40 @@ with model `saaras:v4` in `translit` mode, so transcripts come back in Latin scr
    `WHATSAPP_VERIFY_TOKEN`, so the webhook keeps working). `ADMIN_PASSWORD` is generated for you; read
    it from the service's **Environment** tab afterwards.
 4. Wait for the deploy, then open `https://<your-service>.onrender.com/healthz`. It should return
-   `{"ok": true, "whatsapp": true, "claude": true, "voice": true}`.
+   `{"ok": true, "whatsapp": true, "twilio": false, "claude": true, "voice": true}`.
 
 The service must run as a single instance with one worker (the Dockerfile does this): the message worker
 and scheduler run in-process against one SQLite file. Render snapshots the disk daily.
 
 ## 4. Point WhatsApp at Munshi
 
-In the Meta app: **WhatsApp > Configuration > Webhook**
+In the Meta app: **Step 2. Production setup → Configure Webhooks** (or the app's **Webhooks** page with
+"WhatsApp Business Account" selected):
 
 - Callback URL: `https://<your-service>.onrender.com/webhook`
-- Verify token: the `WHATSAPP_VERIFY_TOKEN` value from Render
-- Click **Verify and save**, then subscribe to the **messages** webhook field.
+- Verify token: your `WHATSAPP_VERIFY_TOKEN` value
+- Click **Verify and save**, then subscribe to the **messages** field.
 
-Send "Hi" to the number from a phone. Munshi asks for a language and five short setup questions, then
-it's ready for bill photos.
+The same can be done without the UI, with the app token `{APP_ID}|{APP_SECRET}`:
+`POST https://graph.facebook.com/v25.0/{APP_ID}/subscriptions` with
+`object=whatsapp_business_account`, `callback_url`, `verify_token`, `fields=messages`.
+
+Send "Hi" to the number from a registered phone. Munshi asks for a language and five short setup
+questions, then it's ready for bill photos. If a reply doesn't arrive, the server log and the console's
+trace show Meta's delivery report (`whatsapp_delivery_failed`) with the error code.
 
 ## 4b. Optional: Twilio as a second WhatsApp channel
 
-Meta sometimes locks a brand-new business account for review (delivery error 131031) for a day or
-two. Twilio's WhatsApp sandbox works within minutes and can run alongside Meta; Munshi replies to
-each owner on the channel they wrote in on.
+Munshi can also run on a Twilio WhatsApp sender, alongside Meta; each owner is answered on the channel
+they wrote in on. Set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` and `TWILIO_WHATSAPP_FROM`
+(`whatsapp:+<number>`), and point the sender's inbound webhook at `https://<your host>/twilio` (POST).
+Twilio signs each call; Munshi checks the signature against the public URL (set `TWILIO_WEBHOOK_URL` if
+the service sits behind a proxy that rewrites it).
 
-1. Create a free account at twilio.com. On the Console home, copy **Account SID** and **Auth Token**
-   into `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN`.
-2. **Messaging → Try it out → Send a WhatsApp message**: note the sandbox number (`+1 415 523 8886`)
-   and its join code ("join <word-word>"). Set `TWILIO_WHATSAPP_FROM=whatsapp:+14155238886` and
-   `TWILIO_SANDBOX_JOIN=<word-word>`.
-3. **Sandbox settings**: "When a message comes in" = `https://<your host>/twilio`, method POST. Save.
-4. Each tester sends `join <word-word>` to the sandbox number once; the landing page link pre-fills
-   it when `MUNSHI_PUBLIC_CHANNEL=twilio`.
-
-Sandbox limits: no reply buttons (Munshi writes "Reply OK or Edit" instead), only joined phones can be
-messaged (so distributor orders are handed to the owner to forward), and the join expires after 72 hours
-of silence. A Twilio-provisioned production sender removes all three.
+Two cautions. Twilio's old free **WhatsApp Sandbox is not available to accounts created in its new
+Console** (the trial "Try out WhatsApp" can only send Twilio's own templates, so it cannot carry Munshi's
+replies); the adapter still supports the sandbox for older accounts that have it. And a Twilio-provisioned
+sender needs the same Meta business verification as the Cloud API, so Twilio is not a way around that.
 
 ## 5. Optional: message templates
 
@@ -105,7 +120,8 @@ Set `WHATSAPP_TEMPLATE_LANG` if the templates aren't in `en`.
 - `/admin` shows every shop: the conversation, each tool call the agent made, the ledger, orders, expiry
   risk and the shop's learned vocabulary. Owners never see it.
 - Logs are in the Render dashboard. A failed send or a declined Claude call is logged with the reason.
-- Back up `/var/data/munshi.db` with `sqlite3 /var/data/munshi.db ".backup /var/data/backup.db"` from the
+- Back up `/var/data/munshi.db` from the Render shell (the image has no `sqlite3` binary, so use Python):
+  `python -c "import sqlite3; sqlite3.connect('/var/data/munshi.db').backup(sqlite3.connect('/var/data/backup.db'))"`, run from the
   Render shell.
 
 ## Local development

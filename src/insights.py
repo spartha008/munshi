@@ -54,10 +54,10 @@ def demand_report(conn) -> list[dict]:
         FROM sales_estimate se
         JOIN shop s ON s.shop_id = se.shop_id
         JOIN item i ON i.sku_id = se.sku_id
-        WHERE s.onboarding_step IS NULL AND s.locality IS NOT NULL
+        WHERE s.onboarding_step IS NULL AND s.locality_key IS NOT NULL
           AND i.shop_id IS NULL                      -- shop-learned items could identify a shop
           AND se.velocity_per_day > 0
-        GROUP BY s.locality, i.sku_id
+        GROUP BY s.locality_key, i.sku_id
         HAVING COUNT(DISTINCT se.shop_id) >= ?
         ORDER BY s.locality, i.category, next_week_units DESC""", K_MIN_SHOPS)
     return out

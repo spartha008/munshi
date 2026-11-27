@@ -13,9 +13,9 @@ COPY src ./src
 COPY prompts ./prompts
 COPY data ./data
 
-RUN useradd --create-home --uid 10001 munshi \
-    && mkdir -p /var/data && chown -R munshi /var/data /app
-USER munshi
+# Runs as root: Render mounts the persistent disk at runtime with root ownership, and the ledger
+# must be writable there from the first start.
+RUN mkdir -p /var/data
 
 EXPOSE 8000
 # One worker on purpose: the message worker and scheduler run in-process against one SQLite file.

@@ -45,8 +45,9 @@ def test_outside_24h_window_nothing_is_sent_without_a_template(conn, monkeypatch
     clock.set_now(THURSDAY_7AM)
     scheduler.tick(w)
     assert sent == []
-    # the order is still drafted and waiting for the owner
-    assert conn.execute("SELECT COUNT(*) FROM orders WHERE status='proposed'").fetchone()[0] == 1
+    # the undelivered proposal is cancelled, so a later "ok" cannot send an order the owner never saw
+    o = conn.execute("SELECT status, summary FROM orders ORDER BY order_id DESC LIMIT 1").fetchone()
+    assert tuple(o) == ("cancelled", "not delivered")
 
 
 def test_due_reminders_are_sent_and_marked(conn):

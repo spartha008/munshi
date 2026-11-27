@@ -179,7 +179,13 @@ def draft_order(conn, shop_id: str) -> dict:
     }
 
 
+OPEN_ORDER_HOURS = 48   # a proposal the owner hasn't answered in two days is stale, not approvable
+
+
 def open_order(conn, shop_id: str) -> dict | None:
+    cutoff = iso(clock.now() - timedelta(hours=OPEN_ORDER_HOURS))
+    conn.execute("UPDATE orders SET status='cancelled', summary='expired' WHERE shop_id=? "
+                 "AND status IN ('proposed','edited') AND proposed_on < ?", (shop_id, cutoff))
     return row(conn, """SELECT * FROM orders WHERE shop_id=? AND status IN ('proposed','edited')
                         ORDER BY order_id DESC LIMIT 1""", shop_id)
 
@@ -258,20 +264,20 @@ def send_order(conn, order_id: int) -> dict:
     dist = row(conn, "SELECT * FROM distributor WHERE distributor_id=?", o["distributor_id"]) or {}
     name = dist.get("name") or "your distributor"
     body = distributor_message(conn, order_id)
-    channel, status, error, error_code = "forward", "handed_to_owner", None, None
+    channel, status, error, error_code, provider_id = "forward", "handed_to_owner", None, None, None
     if dist.get("phone"):
         try:
-            channels.get_transport().send_order_to_distributor(dist["phone"], shop["name"] or "", body,
-                                                               channel=shop.get("channel"))
-            channel, status = "whatsapp", "delivered"
+            provider_id = channels.get_transport().send_order_to_distributor(dist["phone"], shop["name"] or "", body,
+                                                                             channel=shop.get("channel"))
+            channel, status = "whatsapp", "accepted"   # 'delivered' only once the provider reports it
         except channels.DeliveryError as e:
             error, error_code = str(e), e.code
             log("send_order.fallback", {"to": name}, {"error": error})
     else:
         error = "no distributor number saved"
-    conn.execute("INSERT INTO outbox (shop_id, to_name, to_phone, body, channel, status, error, created_at) "
-                 "VALUES (?,?,?,?,?,?,?,?)", (o["shop_id"], name, dist.get("phone"), body, channel, status, error,
-                                              iso(clock.now())))
+    conn.execute("INSERT INTO outbox (shop_id, to_name, to_phone, body, channel, status, error, provider_msg_id, "
+                 "created_at) VALUES (?,?,?,?,?,?,?,?,?)", (o["shop_id"], name, dist.get("phone"), body, channel, status,
+                                                           error, provider_id, iso(clock.now())))
     conn.execute("UPDATE orders SET status='sent', sent_on=? WHERE order_id=?", (iso(clock.now()), order_id))
     return {"order_id": order_id, "sent_to": name, "channel": channel, "body": body, "error": error,
             "error_code": error_code, "has_phone": bool(dist.get("phone")),

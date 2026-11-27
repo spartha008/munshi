@@ -26,6 +26,7 @@
         <div class="cta" {{HAS_NUMBER}}>
           <a class="btn" href="{{WA_LINK}}">Message Munshi on WhatsApp</a>
           <span class="muted">{{WA_NUMBER}}</span>
+          <span class="muted note" {{IS_TEST_NUMBER}}>Pilot number: it can only reply to phones we've registered. Send us your number first.</span>
         </div>
       </div>
       <div class="phone-card" aria-label="Example conversation">
@@ -34,7 +35,7 @@
           <div class="b in">📷 Bill photo · Sharma Distributors</div>
           <div class="b out">Got it: 14 items, ₹6,048. 3 expire within 20 days — juice ×4, namkeen ×6, cream biscuit ×8.</div>
           <div class="b in">🎤 “Maggi khatam, Parle-G do bache”</div>
-          <div class="b out">Thursday order ready: ₹3,995 of your ₹5,000 budget. 2 slow movers skipped. 1 scheme refused — namkeen 12+1 would lock ₹600 for 61 days.</div>
+          <div class="b out">Thursday order ready: ₹3,995 of your ₹5,000 budget. 2 slow movers skipped. 1 scheme refused — namkeen 12+1 would lock ₹600 for 65 days.</div>
           <div class="b in">OK</div>
           <div class="b out">Sent to Sharma Distributors. Reminder: return 4 juice packs before the return window closes.</div>
         </div>
@@ -69,7 +70,7 @@
 
   <footer class="site-foot">
     <div class="wrap">
-      <p>Your shop's data stays yours. Bill photos and messages are used only to run your shop's ledger; only anonymous
+      <p>Your shop's data stays yours. Bill photos are read by Claude and voice notes by Sarvam, only to run your shop's ledger; only anonymous
         area-level totals are ever shared. UPI SMS: amounts only, never names.</p>
       <p class="muted">Munshi · Team Degen (Mohammed Amees, Girish Kumara M) · GAVS Hackathon, Problem 5.1</p>
     </div>

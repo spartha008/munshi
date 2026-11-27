@@ -9,6 +9,7 @@ from . import clock, rules
 from .db import iso, parse_dt, row, rows
 
 WINDOW_DAYS = 28
+MIN_NEIGHBOURS = 3   # cold-start velocities come from at least this many nearby shops
 
 
 @dataclass
@@ -77,7 +78,8 @@ def neighbour_velocity(conn, shop_id: str, sku_id: str) -> list[float]:
         SELECT se.velocity_per_day FROM sales_estimate se
         JOIN shop s ON s.shop_id = se.shop_id
         WHERE se.sku_id = ? AND se.shop_id != ?
-          AND s.locality = (SELECT locality FROM shop WHERE shop_id = ?)
+          AND s.locality_key IS NOT NULL
+          AND s.locality_key = (SELECT locality_key FROM shop WHERE shop_id = ?)
           AND se.velocity_per_day IS NOT NULL""", sku_id, shop_id, shop_id)]
 
 
@@ -112,7 +114,7 @@ def item_state(conn, shop_id: str, item: dict, now: datetime | None = None) -> I
     else:
         nb = neighbour_velocity(conn, shop_id, sku)
         recent_in = sum(p["_units"] for p in buys if p["_t"] >= start)
-        if nb:
+        if len(nb) >= MIN_NEIGHBOURS:   # a locality estimate, never one neighbour's number
             nb.sort()
             velocity = nb[len(nb) // 2]
             band = rules.Band(min(nb) * 0.8, max(nb) * 1.2, "cohort")
@@ -163,8 +165,10 @@ def item_state(conn, shop_id: str, item: dict, now: datetime | None = None) -> I
             b.at_risk_units = max(0.0, b.units - can_sell)
         ahead += b.units
 
+    # Price the order at what this shop actually pays (its latest bill line), not the catalogue's seed cost.
+    paid = next((p["unit_price"] for p in reversed(buys) if p["unit_price"]), None)
     return ItemState(sku, item["canonical_name"], item["category"], item["shelf_life_days"],
-                     item["unit_cost"], item["mrp"], item["case_qty"], velocity, band, observed,
+                     paid or item["unit_cost"], item["mrp"], item["case_qty"], velocity, band, observed,
                      censored, on_hand, last_check, batches, source)
 
 

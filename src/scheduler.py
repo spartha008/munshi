@@ -40,7 +40,11 @@ def tick(worker) -> list[tuple[str, str]]:
                 due = bool(ledger.stocked_items(conn, sid)) and _claim(conn, sid, "morning_order")
                 replies = agent.morning(conn, sid) if due else []
             if due:
-                worker.proactive(shop, replies)
+                if not worker.proactive(shop, replies):
+                    # The owner never saw this proposal: an "ok" later must not send it.
+                    with lock:
+                        conn.execute("UPDATE orders SET status='cancelled', summary='not delivered' "
+                                     "WHERE shop_id=? AND status='proposed'", (sid,))
                 ran.append((sid, "morning_order"))
         if now.hour >= 8:
             with lock:
@@ -50,10 +54,15 @@ def tick(worker) -> list[tuple[str, str]]:
                 replies = agent.run_job(conn, sid, "⏰ Reminders", lambda: [
                     "Reminder: " + "; ".join(r["reason"] for r in rem) + " — the return window closes today."
                 ]) if rem else []
-                for r in rem:
-                    conn.execute("UPDATE reminder SET status='sent' WHERE id=?", (r["id"],))
             if replies:
-                worker.proactive(shop, replies)
+                if worker.proactive(shop, replies):
+                    with lock:
+                        for r in rem:
+                            conn.execute("UPDATE reminder SET status='sent' WHERE id=?", (r["id"],))
+                else:  # try again tomorrow; the job claim is per day
+                    with lock:
+                        conn.execute("DELETE FROM job_run WHERE shop_id=? AND job='reminders' AND run_date=?",
+                                     (sid, now.date().isoformat()))
                 ran.append((sid, "reminders"))
         if now.hour >= 10:
             with lock:
@@ -61,7 +70,12 @@ def tick(worker) -> list[tuple[str, str]]:
                 q = promote_next(conn, sid) if due else None
                 replies = agent.run_job(conn, sid, "⏰ Today's question", lambda: [Reply(q["text"], YES_NO)]) if q else []
             if replies:
-                worker.proactive(shop, replies)
+                if not worker.proactive(shop, replies):
+                    # Not delivered: back to the queue, so a later "yes" can't answer a question never seen.
+                    with lock:
+                        conn.execute("UPDATE question SET status='queued', asked_on=NULL WHERE id=?", (q["id"],))
+                        conn.execute("DELETE FROM job_run WHERE shop_id=? AND job='questions' AND run_date=?",
+                                     (sid, now.date().isoformat()))
                 ran.append((sid, "questions"))
     return ran
 
