@@ -21,6 +21,7 @@ import secrets
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import parse_qsl
 
 import qrcode
 import qrcode.image.svg
@@ -167,8 +168,9 @@ async def webhook(request: Request):
 
 @app.post("/twilio")
 async def twilio_webhook(request: Request):
-    """Twilio posts form fields; the signature covers the public URL it was given plus those fields."""
-    form = {k: v for k, v in (await request.form()).items() if isinstance(v, str)}
+    """Twilio posts URL-encoded form fields; the signature covers the public URL it was given plus those fields."""
+    raw = await request.body()
+    form = dict(parse_qsl(raw.decode("utf-8", "replace"), keep_blank_values=True))
     url = os.environ.get("TWILIO_WEBHOOK_URL")
     if not url:  # rebuild the public URL behind a tunnel or proxy
         scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
