@@ -8,9 +8,11 @@ from .agent import DAYS, HELP, Reply, log_message
 from .db import iso, row
 
 LANG_BUTTONS = [("lang_en", "English"), ("lang_kn", "ಕನ್ನಡ"), ("lang_hi", "हिंदी")]
-LANGS = {"lang_en": "en", "english": "en", "en": "en", "1": "en",
-         "lang_kn": "kn", "kannada": "kn", "ಕನ್ನಡ": "kn", "kn": "kn", "2": "kn",
-         "lang_hi": "hi", "hindi": "hi", "हिंदी": "hi", "hi": "hi", "3": "hi"}
+# Button ids, full names and 1/2/3 only. Bare codes are left out on purpose: "hi" is a greeting,
+# and a first-time owner typing it must not land in Hindi onboarding.
+LANGS = {"lang_en": "en", "english": "en", "1": "en",
+         "lang_kn": "kn", "kannada": "kn", "ಕನ್ನಡ": "kn", "2": "kn",
+         "lang_hi": "hi", "hindi": "hi", "हिंदी": "hi", "3": "hi"}
 
 
 def clean_phone(s: str | None) -> str | None:
@@ -20,10 +22,10 @@ def clean_phone(s: str | None) -> str | None:
     return digits if 11 <= len(digits) <= 15 else None
 
 
-def start(conn, wa_id: str, profile_name: str | None) -> list[Reply]:
-    conn.execute("""INSERT INTO shop (shop_id, owner_name, owner_phone, onboarding_step, created_at, last_inbound_at)
-                    VALUES (?,?,?,?,?,?)""", (wa_id, profile_name, wa_id, "language", iso(clock.now()),
-                                              iso(clock.now())))
+def start(conn, wa_id: str, profile_name: str | None, channel: str = "meta") -> list[Reply]:
+    conn.execute("""INSERT INTO shop (shop_id, owner_name, owner_phone, onboarding_step, channel, created_at,
+                    last_inbound_at) VALUES (?,?,?,?,?,?,?)""",
+                 (wa_id, profile_name, wa_id, "language", channel, iso(clock.now()), iso(clock.now())))
     return [Reply("Namaskara! ನಮಸ್ಕಾರ! नमस्ते!\nI'm Munshi, your shop's clerk on WhatsApp. I read your distributor "
                   "bills, keep track of stock and expiry, and get the salesman's order ready within your cash. "
                   "I never order anything without your OK.\n\nWhich language should I use?", LANG_BUTTONS)]

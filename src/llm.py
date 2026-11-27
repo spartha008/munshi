@@ -76,6 +76,8 @@ BILL_SCHEMA = {
         "distributor": _nullable("string"),
         "bill_date": _nullable("string"),
         "bill_total": _nullable("number"),
+        "discount": _nullable("number"),
+        "tax": _nullable("number"),
         "items": {
             "type": "array",
             "items": {
@@ -98,7 +100,7 @@ BILL_SCHEMA = {
             },
         },
     },
-    "required": ["distributor", "bill_date", "bill_total", "items"],
+    "required": ["distributor", "bill_date", "bill_total", "discount", "tax", "items"],
     "additionalProperties": False,
 }
 
@@ -109,10 +111,11 @@ NAME_SCHEMA = {
         "sku_name": _nullable("string"),
         "qty": _nullable("number"),
         "action": {"type": "string", "enum": ["sold_out", "count", "running_low", "unknown"]},
+        "candidate_sku_id": _nullable("string"),
         "confidence": {"type": "number"},
         "question": _nullable("string"),
     },
-    "required": ["sku_id", "sku_name", "qty", "action", "confidence", "question"],
+    "required": ["sku_id", "sku_name", "qty", "action", "candidate_sku_id", "confidence", "question"],
     "additionalProperties": False,
 }
 

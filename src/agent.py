@@ -35,8 +35,12 @@ ORDER_BUTTONS = [("ok", "OK, send ✅"), ("edit", "Edit ✏️")]
 
 OK_WORDS = {"ok", "okay", "ok send", "send", "send it", "approve", "approved", "theek hai", "thik hai", "sari",
             "done", "👍", "ok.", "ok!", "yes send", "haan bhejo", "bhejo", "kalisi"}
-UPI_RE = re.compile(r"(?:rs\.?|inr|₹)\s*([\d,]+(?:\.\d{1,2})?)[^.\n]*?(?:credited|received)|"
-                    r"(?:credited|received)[^.\n]*?(?:rs\.?|inr|₹)\s*([\d,]+(?:\.\d{1,2})?)", re.I)
+# A forwarded bank / UPI message: an amount plus payment vocabulary. Never a shelf check.
+AMOUNT_RE = re.compile(r"(?:rs\.?|inr|₹)\s*([\d,]+(?:\.\d{1,2})?)", re.I)
+PAYMENT_RE = re.compile(r"\b(upi|imps|neft|credited|debited|paid to|received from|transaction id|txn|"
+                        r"payment (?:successful|received|done)|ref(?:erence)? no)\b", re.I)
+OUTGOING_RE = re.compile(r"\b(paid to|debited|sent to|payment (?:successful|done))\b", re.I)
+INCOMING_RE = re.compile(r"\b(credited|received from|payment received)\b", re.I)
 DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 
 HELP = ("Send me:\n"
@@ -113,7 +117,7 @@ def _route(conn, shop_id: str, msg: Inbound) -> list:
     text = (msg.text or "").strip()
     if not text:
         return [HELP]
-    if msg.kind == "upi" or UPI_RE.search(text):
+    if msg.kind == "upi" or (PAYMENT_RE.search(text) and AMOUNT_RE.search(text)):
         return on_upi(conn, shop_id, text)
 
     low = text.lower().strip()
@@ -313,7 +317,9 @@ def _remember_distributor(conn, shop_id: str, name: str | None) -> None:
 def on_shelf_check(conn, shop_id: str, text: str, kind: str) -> list:
     events, done, unknown = [], [], []
     asked = None
-    for phrase in split_note(text):
+    # A shelf note names a handful of items; anything longer is not a shelf note.
+    phrases = [p for p in split_note(text) if re.search(r"[A-Za-zऀ-෿]", p)][:8]
+    for phrase in phrases:
         r = normalise_item(conn, shop_id, phrase)
         if r["sku_id"] and r["action"] in {"sold_out", "count", "running_low"}:
             events.append({"type": "shelf_check", "sku_id": r["sku_id"], "status": r["action"],
@@ -352,9 +358,29 @@ def on_shelf_check(conn, shop_id: str, text: str, kind: str) -> list:
 # --------------------------------------------------------------------------- #
 # Learn: answers to yes/no questions
 # --------------------------------------------------------------------------- #
+def _learned_item_for(conn, shop_id: str, name: str) -> str | None:
+    """The SKU of an item Munshi created from this shop's bill for `name`, if any."""
+    r = row(conn, """SELECT a.sku_id FROM alias a JOIN item i ON i.sku_id = a.sku_id
+                     WHERE a.shop_id=? AND a.phrase=? AND i.shop_id=?""", shop_id, name.strip().lower(), shop_id)
+    return r["sku_id"] if r else None
+
+
 def _is_pending_bill_name(conn, shop_id: str, name: str) -> bool:
-    return bool(row(conn, "SELECT 1 FROM purchase WHERE shop_id=? AND status='pending' AND lower(printed_name)=?",
-                    shop_id, name.strip().lower()))
+    """A name the owner can teach: a bill line waiting for an answer, or an item Munshi made up from a bill."""
+    pending = row(conn, "SELECT 1 FROM purchase WHERE shop_id=? AND status='pending' AND lower(printed_name)=?",
+                  shop_id, name.strip().lower())
+    return bool(pending) or _learned_item_for(conn, shop_id, name) is not None
+
+
+def _merge_learned_item(conn, shop_id: str, learned_sku: str, target_sku: str) -> None:
+    """'Maggi Noodles (Pack) is Maggi 70g': fold a bill-made item into the real SKU, history included."""
+    for table in ("purchase", "shelf_check", "order_line"):
+        conn.execute(f"UPDATE {table} SET sku_id=? WHERE sku_id=?", (target_sku, learned_sku))
+    conn.execute("UPDATE alias SET sku_id=? WHERE sku_id=?", (target_sku, learned_sku))
+    conn.execute("UPDATE scheme SET sku_id=? WHERE sku_id=?", (target_sku, learned_sku))
+    conn.execute("DELETE FROM sales_estimate WHERE sku_id=?", (learned_sku,))
+    conn.execute("DELETE FROM item WHERE sku_id=? AND shop_id=?", (learned_sku, shop_id))
+    trace.log("merge_item", {"from": learned_sku}, {"into": target_sku})
 
 
 def _confirm_bill_alias(conn, shop_id: str, printed: str, sku_id: str) -> str:
@@ -363,7 +389,7 @@ def _confirm_bill_alias(conn, shop_id: str, printed: str, sku_id: str) -> str:
                  "AND lower(printed_name)=?", (sku_id, shop_id, printed.lower()))
     update_stock(conn, shop_id, [])
     item = ledger.item_by_sku(conn, sku_id)
-    return f"Saved: '{printed}' = {item['canonical_name']}. Added to stock, and I won't ask again."
+    return f"Saved: '{printed}' = {item['canonical_name']}. Counted in stock, and I won't ask again."
 
 
 def on_answer(conn, shop_id: str, q: dict, yn: str) -> list:
@@ -397,9 +423,11 @@ def on_answer(conn, shop_id: str, q: dict, yn: str) -> list:
                            f"{sc['buy_n']}+{sc['free_m']} with you. Their WhatsApp: +{other['owner_phone']}.")
             try:
                 from . import channels
-                channels.get_transport().send_text(other["owner_phone"],
+                channels.get_transport().send_text(
+                    other["owner_phone"],
                     f"{me['name']} ({me['locality']}) agreed to split {sc['name']} {sc['buy_n']}+{sc['free_m']}. "
-                    f"Their WhatsApp: +{me['owner_phone']}.")
+                    f"Their WhatsApp: +{me['owner_phone']}.",
+                    channel=other.get("channel"))
             except Exception as e:  # noqa: BLE001 - best effort; the trace shows it
                 trace.log("pool_notify.failed", {"to": "requesting shop"}, {"error": str(e)})
         else:
@@ -419,6 +447,9 @@ def on_teach(conn, shop_id: str, printed: str, item_text: str) -> list:
     sku = r["sku_id"] or r.get("guess")
     if not sku:
         return [f"I couldn't find '{item_text}'. Try the brand and pack size."]
+    learned = _learned_item_for(conn, shop_id, printed)
+    if learned and learned != sku:
+        _merge_learned_item(conn, shop_id, learned, sku)
     for q in rows(conn, "SELECT id FROM question WHERE shop_id=? AND status IN ('open','queued') "
                         "AND kind='bill_alias' AND payload LIKE ?", shop_id, f'%{printed.strip()}%'):
         close_question(conn, q["id"], f"taught: {sku}")
@@ -544,10 +575,17 @@ def on_approve(conn, shop_id: str, order: dict, owner_text: str) -> list:
 # Money, settings, other intents
 # --------------------------------------------------------------------------- #
 def on_upi(conn, shop_id: str, text: str) -> list:
-    m = UPI_RE.search(text)
+    m = AMOUNT_RE.search(text)
     if not m:
         return ["I couldn't read an amount in that SMS."]
-    amount = float((m.group(1) or m.group(2)).replace(",", ""))
+    amount = float(m.group(1).replace(",", ""))
+    if OUTGOING_RE.search(text) and not INCOMING_RE.search(text):
+        # Money the shop paid out (e.g. to the distributor) is not a sale.
+        payee = re.search(r"(?:paid|sent) to\s+([A-Za-z][A-Za-z .&]{1,40}?)(?:[.\n|]|$)", text, re.I)
+        who = f" to {payee.group(1).strip().title()}" if payee else ""
+        trace.log("read_payment_sms", {"sms": "<redacted>"}, {"amount": amount, "direction": "out"})
+        return [f"That's a payment you made ({_r(amount)}{who}), not a sale, so I haven't counted it. "
+                "Forward the SMS you get when a customer pays you, and I'll count those."]
     conn.execute("INSERT INTO upi_sale (shop_id, amount, received_at, raw) VALUES (?,?,?,?)",
                  (shop_id, amount, iso(clock.now()), None))  # amounts only, never sender names
     trace.log("read_upi_sms", {"sms": "<redacted>"}, {"amount": amount})

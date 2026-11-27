@@ -17,6 +17,7 @@ Return ONLY this JSON, no prose:
   "sku_name": string | null,
   "qty": number | null,
   "action": "sold_out" | "count" | "running_low" | "unknown",
+  "candidate_sku_id": string | null, // the single most likely SKU, even below 0.8
   "confidence": number,             // 0 to 1
   "question": string | null         // one yes/no question in the owner's language
 }
@@ -24,6 +25,6 @@ Return ONLY this JSON, no prose:
 Rules:
 - An alias match always beats a catalogue guess.
 - Never return a SKU that is not in the catalogue. If nothing fits, return null.
-- If confidence is below 0.8, set sku_id to null and write ONE short yes/no
-  question naming the most likely SKU, e.g. "Maggi 70g khatam?".
+- If confidence is below 0.8, set sku_id to null, put the most likely SKU in
+  candidate_sku_id, and write ONE short yes/no question naming it, e.g. "Maggi 70g khatam?".
 - Pack size matters: "maggi bada" is not the same SKU as "maggi chhota".

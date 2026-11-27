@@ -29,7 +29,7 @@ from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Res
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 
-from . import channels, clock, db, insights, ledger, llm, scheduler, stt, whatsapp
+from . import channels, clock, db, insights, ledger, llm, scheduler, stt, twilio_wa, whatsapp
 from .db import row, rows
 from .tools import ordering
 from .tools.stock import score_expiry
@@ -48,10 +48,16 @@ worker = Worker(_conn, _lock)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    transports: dict[str, channels.Transport] = {}
     if whatsapp.configured():
-        channels.set_transport(whatsapp.CloudTransport())
+        transports["meta"] = whatsapp.CloudTransport()
     else:
-        log.warning("WhatsApp is not configured (WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID)")
+        log.warning("Meta WhatsApp is not configured (WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID)")
+    if twilio_wa.configured():
+        transports["twilio"] = twilio_wa.Transport()
+        log.info("Twilio WhatsApp channel on (%s)", "sandbox" if twilio_wa.is_sandbox() else "sender")
+    if transports:
+        channels.set_transport(channels.MultiTransport(transports))
     if not llm.enabled():
         log.warning("Claude is not configured (ANTHROPIC_API_KEY): bill photos can't be read")
     if not stt.configured():
@@ -77,6 +83,15 @@ def _page(name: str) -> str:
 
 
 def _wa_number() -> tuple[str | None, str | None]:
+    """The number and wa.me link the landing page shows. MUNSHI_PUBLIC_CHANNEL picks meta or twilio;
+    by default Meta when configured, else the Twilio sandbox (whose link pre-fills its join code)."""
+    public = os.environ.get("MUNSHI_PUBLIC_CHANNEL") or ("meta" if whatsapp.configured() else "twilio")
+    if public == "twilio" and twilio_wa.configured():
+        digits = re.sub(r"\D", "", os.environ.get("TWILIO_WHATSAPP_FROM") or "")
+        join = os.environ.get("TWILIO_SANDBOX_JOIN")
+        text = f"join%20{join}" if twilio_wa.is_sandbox() and join else "Hi%20Munshi"
+        disp = f"+{digits}" + (f" (first message: join {join})" if twilio_wa.is_sandbox() and join else "")
+        return (disp, f"https://wa.me/{digits}?text={text}") if digits else (None, None)
     disp = os.environ.get("WHATSAPP_DISPLAY_NUMBER")
     digits = re.sub(r"\D", "", disp or "")
     return (disp, f"https://wa.me/{digits}?text=Hi%20Munshi") if digits else (None, None)
@@ -108,7 +123,8 @@ def qr():
 def healthz():
     with _lock:
         _conn.execute("SELECT 1").fetchone()
-    return {"ok": True, "whatsapp": whatsapp.configured(), "claude": llm.enabled(), "voice": stt.configured()}
+    return {"ok": True, "whatsapp": whatsapp.configured(), "twilio": twilio_wa.configured(),
+            "claude": llm.enabled(), "voice": stt.configured()}
 
 
 # --------------------------------------------------------------------------- #
@@ -135,7 +151,35 @@ async def webhook(request: Request):
     for msg in whatsapp.parse_webhook(payload):
         if worker.submit(msg) and os.environ.get("MUNSHI_SYNC") == "1":
             worker.process(worker.q.get_nowait())
-    return {"ok": True}  # statuses (sent/delivered/read) need no action
+    for st in whatsapp.parse_statuses(payload):
+        if st["status"] == "failed":
+            # Meta accepted the send but could not deliver it: keep the reason where the console shows it.
+            log.warning("WhatsApp could not deliver %s to %s: %s", st["message_id"], st["recipient"], st["errors"])
+            with _lock:
+                _conn.execute("INSERT INTO trace (shop_id, message_id, tool, input, output, created_at) "
+                              "VALUES (?,NULL,'whatsapp_delivery_failed',?,?,?)",
+                              (st["recipient"] or "", json.dumps({"wa_message_id": st["message_id"]}),
+                               json.dumps(st["errors"], ensure_ascii=False), db.iso(clock.now())))
+        else:
+            log.info("WhatsApp status: %s %s", st["status"], st["message_id"])
+    return {"ok": True}
+
+
+@app.post("/twilio")
+async def twilio_webhook(request: Request):
+    """Twilio posts form fields; the signature covers the public URL it was given plus those fields."""
+    form = {k: v for k, v in (await request.form()).items() if isinstance(v, str)}
+    url = os.environ.get("TWILIO_WEBHOOK_URL")
+    if not url:  # rebuild the public URL behind a tunnel or proxy
+        scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
+        host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc
+        url = f"{scheme}://{host}{request.url.path}" + (f"?{request.url.query}" if request.url.query else "")
+    if not twilio_wa.valid_signature(url, form, request.headers.get("X-Twilio-Signature")):
+        raise HTTPException(403, "bad signature")
+    msg = twilio_wa.parse_form(form)
+    if msg and worker.submit(msg) and os.environ.get("MUNSHI_SYNC") == "1":
+        worker.process(worker.q.get_nowait())
+    return Response("<?xml version=\"1.0\" encoding=\"UTF-8\"?><Response></Response>", media_type="application/xml")
 
 
 # --------------------------------------------------------------------------- #
@@ -168,7 +212,7 @@ def admin_shops():
     with _lock:
         return {"now": clock.now().isoformat(), "status": {"whatsapp": whatsapp.configured(),
                 "claude": llm.status(), "voice": stt.configured()},
-                "shops": rows(_conn, """SELECT s.shop_id, s.name, s.locality, s.language, s.onboarding_step,
+                "shops": rows(_conn, """SELECT s.shop_id, s.name, s.locality, s.language, s.onboarding_step, s.channel,
                     s.salesman_day, s.cash_budget, s.created_at, s.last_inbound_at,
                     (SELECT COUNT(*) FROM message m WHERE m.shop_id=s.shop_id) AS messages,
                     (SELECT COUNT(*) FROM bill b WHERE b.shop_id=s.shop_id) AS bills,

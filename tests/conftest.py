@@ -17,14 +17,16 @@ class FakeTransport:
     def __init__(self, fail_code=None):
         self.sent, self.fail_code = [], fail_code
 
-    def send_order_to_distributor(self, to, shop_name, text):
+    def send_order_to_distributor(self, to, shop_name, text, channel=None):
         if self.fail_code:
             raise channels.DeliveryError("outside 24h window", self.fail_code)
         self.sent.append((to, text))
+        self.channel = channel
         return "wamid.fake"
 
-    def send_text(self, to, text):
+    def send_text(self, to, text, channel=None):
         self.sent.append((to, text))
+        self.channel = channel
         return "wamid.fake"
 
 

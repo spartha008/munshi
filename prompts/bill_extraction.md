@@ -6,6 +6,8 @@ no markdown fences.
   "distributor": string | null,
   "bill_date": "YYYY-MM-DD" | null,
   "bill_total": number | null,
+  "discount": number | null,        // total discount line, if the bill shows one
+  "tax": number | null,             // GST / tax line, if the bill shows one
   "items": [
     {
       "name": string,                 // exactly as printed, do not normalise
@@ -26,6 +28,6 @@ Rules:
 - Copy item names exactly as printed. Do not expand abbreviations or guess brands.
 - Free or bonus quantities belong in "scheme", never in "qty".
 - If a field is unreadable, set it to null and lower that line's confidence.
-- The sum of line_total should equal bill_total. If it does not, re-read the bill
-  before answering; do not invent a line to make it balance.
+- The sum of line_total, minus "discount", plus "tax", should equal bill_total. If it
+  does not, re-read the bill before answering; do not invent a line to make it balance.
 - Dates printed as MM/YY are expiry dates in "YYYY-MM" form.

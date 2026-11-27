@@ -177,6 +177,8 @@ no markdown fences.
   "distributor": string | null,
   "bill_date": "YYYY-MM-DD" | null,
   "bill_total": number | null,
+  "discount": number | null,        // total discount line, if the bill shows one
+  "tax": number | null,             // GST / tax line, if the bill shows one
   "items": [
     {
       "name": string,                 // exactly as printed, do not normalise
@@ -197,8 +199,8 @@ Rules:
 - Copy item names exactly as printed. Do not expand abbreviations or guess brands.
 - Free or bonus quantities belong in "scheme", never in "qty".
 - If a field is unreadable, set it to null and lower that line's confidence.
-- The sum of line_total should equal bill_total. If it does not, re-read the bill
-  before answering; do not invent a line to make it balance.
+- The sum of line_total, minus "discount", plus "tax", should equal bill_total. If it
+  does not, re-read the bill before answering; do not invent a line to make it balance.
 - Dates printed as MM/YY are expiry dates in "YYYY-MM" form.
 ```
 
@@ -226,6 +228,7 @@ Return ONLY this JSON, no prose:
   "sku_name": string | null,
   "qty": number | null,
   "action": "sold_out" | "count" | "running_low" | "unknown",
+  "candidate_sku_id": string | null, // the single most likely SKU, even below 0.8
   "confidence": number,             // 0 to 1
   "question": string | null         // one yes/no question in the owner's language
 }
@@ -233,8 +236,8 @@ Return ONLY this JSON, no prose:
 Rules:
 - An alias match always beats a catalogue guess.
 - Never return a SKU that is not in the catalogue. If nothing fits, return null.
-- If confidence is below 0.8, set sku_id to null and write ONE short yes/no
-  question naming the most likely SKU, e.g. "Maggi 70g khatam?".
+- If confidence is below 0.8, set sku_id to null, put the most likely SKU in
+  candidate_sku_id, and write ONE short yes/no question naming it, e.g. "Maggi 70g khatam?".
 - Pack size matters: "maggi bada" is not the same SKU as "maggi chhota".
 ```
 

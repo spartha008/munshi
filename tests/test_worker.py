@@ -58,3 +58,14 @@ def test_submit_deduplicates_meta_retries(conn):
     m = WAMessage(SHOP, "dup1", "text", text="hi")
     assert w.submit(m) is True
     assert w.submit(m) is False
+
+
+def test_greeting_hi_does_not_pick_hindi_during_onboarding(conn):
+    w, sent, _ = make(conn)
+    w.process(WAMessage("919333300001", "n1", "text", text="Hi", profile_name="New"))
+    w.process(WAMessage("919333300001", "n2", "text", text="hi"))
+    assert "Please pick a language" in sent[-1]
+    shop = conn.execute("SELECT language, onboarding_step FROM shop WHERE shop_id='919333300001'").fetchone()
+    assert tuple(shop) == ("en", "language")
+    w.process(WAMessage("919333300001", "n3", "text", text="hindi"))
+    assert conn.execute("SELECT language FROM shop WHERE shop_id='919333300001'").fetchone()[0] == "hi"

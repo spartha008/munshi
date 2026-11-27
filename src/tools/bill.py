@@ -10,12 +10,14 @@ class BillUnreadable(Exception):
 
 
 def reconcile(data: dict) -> tuple[bool, float]:
-    """README: the sum of line_total must match bill_total within 1%."""
+    """README: the lines must match bill_total within 1%, after the bill's own discount and tax lines."""
     lines = round(sum(i.get("line_total") or 0 for i in data.get("items", [])), 2)
     total = data.get("bill_total")
     if not total:
         return False, lines
-    return abs(lines - total) <= 0.01 * total, lines
+    adjusted = lines - (data.get("discount") or 0) + (data.get("tax") or 0)
+    slack = max(0.01 * total, 1.0)   # a rupee of rounding is normal on printed bills
+    return (abs(lines - total) <= slack or abs(adjusted - total) <= slack), lines
 
 
 @traced("parse_bill")
